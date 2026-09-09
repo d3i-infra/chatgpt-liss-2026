@@ -4,9 +4,16 @@ on:
   push:
     branches:
       - master
+  workflow_dispatch:
 
 permissions:
   contents: write
+
+env:
+  # The platform this study previews. Its config is generated in CI (configs
+  # are gitignored) and must exist before the wheel is built — the validator
+  # reads it from the installed package, not the checkout.
+  PREVIEW_PLATFORM: chatgpt
 
 jobs:
   build-and-deploy:
@@ -37,6 +44,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install poetry
 
+      - name: Generate Platform Config
+        run: python3 scripts/generate_port_config.py "$PREVIEW_PLATFORM"
+
       - name: Build Python Package
         working-directory: packages/python
         run: |
@@ -55,7 +65,8 @@ jobs:
       - name: Build App
         run: pnpm run build
         env:
-          NODE_ENV: development
+          VITE_PLATFORM: ${{ env.PREVIEW_PLATFORM }}
+          VITE_STANDALONE: "true"
 
       - name: Deploy to GitHub Pages
         uses: peaceiris/actions-gh-pages@v4
