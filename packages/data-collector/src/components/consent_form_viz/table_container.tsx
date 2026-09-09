@@ -1,10 +1,10 @@
-import { useCallback, useMemo, useState, useEffect, useRef } from "react"
-import { 
-    Translator,
+import { useCallback, useMemo, useState, useEffect, useRef, ReactElement } from "react"
+import {
     Title4,
     Title3,
 } from "@eyra/feldspar"
 import TextBundle from "@eyra/feldspar"
+import { resolveAll } from "../../locale/text"
 import { 
     TableWithContext,
     PropsUITableRow,
@@ -14,6 +14,7 @@ import { Figure } from "./visualization_plugin/figure"
 import { Table } from "./table"
 import { SearchBar } from "./search_bar"
 import { matchesQuery, queryTerms } from "./visualization_plugin/searchMatch"
+import { zTable, Table as ValidatedTable } from "./visualization_plugin/types"
 
 interface TableContainerProps {
   id: string
@@ -22,7 +23,7 @@ interface TableContainerProps {
   locale: string
 }
 
-export const TableContainer = ({ id, table, updateTable, locale }: TableContainerProps): JSX.Element => {
+export const TableContainer = ({ id, table, updateTable, locale }: TableContainerProps): ReactElement => {
   const tableVisualizations = table.visualizations != null ? table.visualizations : []
   // The grid is now just one selectable renderer of the table's data, opted
   // in via a { "type": "grid" } visualization spec (see table_extractor.py).
@@ -47,13 +48,34 @@ export const TableContainer = ({ id, table, updateTable, locale }: TableContaine
       lastSearch.current = search
     }, 300)
     return () => clearTimeout(timer)
-  }, [search, lastSearch])
+  }, [search, lastSearch, table.originalBody.rows])
 
   const searchedTable = useMemo(() => {
     if (searchFilterIds === undefined) return table
     const filteredRows = table.body.rows.filter((row) => searchFilterIds.has(row.id))
     return { ...table, body: { ...table.body, rows: filteredRows } }
   }, [table, searchFilterIds])
+
+  // Validate once per table update and share across figures — previously every
+  // Figure deep-cloned the full table via zod (issue #122). Skipped entirely
+  // for tables with no figures (a grid-only table needs no validation).
+  const validatedTable: ValidatedTable | null = useMemo(() => {
+    if (figureVisualizations.length === 0) return null
+    const result = zTable.safeParse(searchedTable)
+    if (!result.success) console.error(result.error)
+    return result.success ? result.data : null
+  }, [searchedTable, figureVisualizations.length])
+
+  // The unfiltered table, validated the same way, for the self-filtering
+  // visualizations (chat_conversation, calendar_heatmap) that do their own
+  // matching and so must see rows the search box has filtered out. Rows pass
+  // by reference, so this second parse allocates no rows.
+  const validatedFullTable: ValidatedTable | null = useMemo(() => {
+    if (figureVisualizations.length === 0) return null
+    const result = zTable.safeParse(table)
+    if (!result.success) console.error(result.error)
+    return result.success ? result.data : null
+  }, [table, figureVisualizations.length])
 
   const handleDelete = useCallback(
     (rowIds?: string[]) => {
@@ -75,14 +97,14 @@ export const TableContainer = ({ id, table, updateTable, locale }: TableContaine
         updateTable(id, newTable)
       }
     },
-    [id, table, searchedTable]
+    [id, table, searchedTable, updateTable]
   )
 
   const handleUndo = useCallback(() => {
     const deletedRows = table.deletedRows.slice(0, -1)
     const newTable = deleteTableRows(table, deletedRows)
     updateTable(id, newTable)
-  }, [id, table])
+  }, [id, table, updateTable])
 
   // Un-deletes specific rows (the inverse of handleDelete for a known set of
   // ids, as opposed to handleUndo which pops the whole last deletion batch):
@@ -158,29 +180,30 @@ export const TableContainer = ({ id, table, updateTable, locale }: TableContaine
         <div
           key="Visualizations"
           className={`pt-2 grid w-full gap-4 transition-all ${
-            figureVisualizations.length > 0 && unfilteredRows > 0 ? "" : "hidden"
+            figureVisualizations.length > 0 && unfilteredRows > 0 && validatedTable != null && validatedFullTable != null ? "" : "hidden"
           }`}
         >
-          {groupVisualizations(figureVisualizations).map((group, groupIndex) => (
-            <div key={groupIndex} className="min-[1000px]:flex lg:flex-row flex-wrap gap-4">
-              {group.map((vs: any, i: number) => (
-                <div key={i} className="flex-1 min-w-[280px]">
-                  <Figure
-                    key={table.id + "_" + String(groupIndex) + "_" + String(i)}
-                    tableInput={searchedTable}
-                    fullTableInput={table}
-                    search={search}
-                    onSearch={setSearch}
-                    visualizationInput={vs}
-                    locale={locale}
-                    handleDelete={handleDelete}
-                    handleUndo={handleUndo}
-                    handleRestore={handleRestore}
-                  />
-                </div>
-              ))}
-            </div>
-          ))}
+          {validatedTable != null && validatedFullTable != null &&
+            groupVisualizations(figureVisualizations).map((group, groupIndex) => (
+              <div key={groupIndex} className="min-[1000px]:flex lg:flex-row flex-wrap gap-4">
+                {group.map((vs: any, i: number) => (
+                  <div key={i} className="flex-1 min-w-[280px]">
+                    <Figure
+                      key={table.id + "_" + String(groupIndex) + "_" + String(i)}
+                      tableInput={validatedTable}
+                      fullTableInput={validatedFullTable}
+                      search={search}
+                      onSearch={setSearch}
+                      visualizationInput={vs}
+                      locale={locale}
+                      handleDelete={handleDelete}
+                      handleUndo={handleUndo}
+                      handleRestore={handleRestore}
+                    />
+                  </div>
+                ))}
+              </div>
+            ))}
         </div>
       </div>
     </div>
@@ -282,15 +305,28 @@ const zoomOutIcon = (
 )
 
 function getTranslations(locale: string): Record<string, string> {
-  const translated: Record<string, string> = {}
-  for (const [key, value] of Object.entries(translations)) {
-    translated[key] = Translator.translate(value, locale)
-  }
-  return translated
+  return resolveAll(translations, locale)
 }
 
 const translations = {
-  showTable: new TextBundle().add("en", "Show table").add("nl", "Tabel tonen"),
-  hideTable: new TextBundle().add("en", "Hide table").add("nl", "Tabel verbergen"),
-  searchPlaceholder: new TextBundle().add("en", "Type here to search through this data...").add("nl", "Type hier om te zoeken in deze gegevens..."),
+  // The fuller invitation this study uses, rather than upstream's bare
+  // "Search"; de/it/es are provisional machine translations (see README).
+  searchPlaceholder: new TextBundle()
+    .add("en", "Type here to search through this data...")
+    .add("nl", "Type hier om te zoeken in deze gegevens...")
+    .add("de", "Tippen Sie hier, um diese Daten zu durchsuchen...")
+    .add("it", "Digiti qui per cercare in questi dati...")
+    .add("es", "Escriba aquí para buscar en estos datos..."),
+  showTable: new TextBundle()
+    .add("en", "Show table")
+    .add("nl", "Tabel tonen")
+    .add("de", "Tabelle anzeigen")
+    .add("it", "Mostra tabella")
+    .add("es", "Mostrar tabla"),
+  hideTable: new TextBundle()
+    .add("en", "Hide table")
+    .add("nl", "Tabel verbergen")
+    .add("de", "Tabelle ausblenden")
+    .add("it", "Nascondi tabella")
+    .add("es", "Ocultar tabla"),
 }

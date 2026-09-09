@@ -15,7 +15,7 @@ import {
   ContentReferenceAltText,
   Translatable,
 } from '../types'
-import { getTranslations } from '../translate'
+import { resolveAllFlat as getTranslations } from '../../../../locale/text'
 import { matchesQuery, queryTerms } from '../searchMatch'
 import { buildLiteBlocks, InputSegment, LiteBlock, LiteInlineChild } from './liteMarkdown'
 import RemoveSvg from '../../assets/images/remove.svg'

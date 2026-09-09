@@ -1,5 +1,5 @@
-import { VisualizationData, ChartVisualizationData, TextVisualizationData, ConversationVisualizationData, CalendarVisualizationData, Translatable, zTable, zVisualizationType } from './types'
-import { memo, useEffect, useMemo, useState } from 'react'
+import { VisualizationData, ChartVisualizationData, TextVisualizationData, ConversationVisualizationData, CalendarVisualizationData, Translatable, Table, zVisualizationType } from './types'
+import { memo, useEffect, useMemo, useState, ReactElement } from 'react'
 
 import useVisualizationData from './visualizationDataFunctions/useVisualizationData'
 
@@ -10,7 +10,7 @@ import CalendarHeatmap, { helpText as calendarHeatmapHelp } from './figures/cale
 import { zoomInIcon, zoomOutIcon } from './zoom_icons'
 import { z } from 'zod'
 import { Loader } from './ui/loader'
-import { getTranslations, translate } from './translate'
+import { resolveFlatText, resolveAllFlat } from '../../../locale/text'
 import HelpSvg from '../assets/images/help.svg'
 
 const doubleTypes = ['wordcloud', 'chat_conversation']
@@ -29,9 +29,12 @@ const helpTexts: Record<string, Translatable> = {
 }
 type ShowStatus = 'hidden' | 'visible' | 'double'
 
+// Both tables arrive already validated: table_container runs zTable once per
+// update and hands the parsed result down, rather than every figure
+// re-parsing the same rows (#122).
 export interface FigureProps {
-  tableInput: any
-  fullTableInput: any
+  tableInput: Table
+  fullTableInput: Table
   search: string
   onSearch: (search: string) => void
   visualizationInput: any
@@ -51,22 +54,18 @@ export const Figure = ({
   handleDelete,
   handleUndo,
   handleRestore
-}: FigureProps): JSX.Element => {
-  const tableValidator = useMemo(() => zTable.safeParse(tableInput), [tableInput])
-  const fullTableValidator = useMemo(() => zTable.safeParse(fullTableInput), [fullTableInput])
+}: FigureProps): ReactElement => {
   const visualizationValidator = useMemo(() => zVisualizationType.safeParse(visualizationInput), [visualizationInput])
 
-  if (!tableValidator.success || !fullTableValidator.success || !visualizationValidator.success) {
-    if (!tableValidator.success) console.error(tableValidator.error)
-    if (!fullTableValidator.success) console.error(fullTableValidator.error)
-    if (!visualizationValidator.success) console.error(visualizationValidator.error)
+  if (!visualizationValidator.success) {
+    console.error(visualizationValidator.error)
     return <div />
   }
 
   return (
     <FigureComponent
-      table={tableValidator.data}
-      fullTable={fullTableValidator.data}
+      table={tableInput}
+      fullTable={fullTableInput}
       search={search}
       onSearch={onSearch}
       visualization={visualizationValidator.data}
@@ -79,8 +78,8 @@ export const Figure = ({
 }
 
 export interface ValidatedFigureProps {
-  table: z.infer<typeof zTable>
-  fullTable: z.infer<typeof zTable>
+  table: Table
+  fullTable: Table
   search: string
   onSearch: (search: string) => void
   visualization: z.infer<typeof zVisualizationType>
@@ -100,7 +99,7 @@ export const FigureComponent = ({
   handleDelete,
   handleUndo,
   handleRestore
-}: ValidatedFigureProps): JSX.Element => {
+}: ValidatedFigureProps): ReactElement => {
   // The chat visualization filters conversations and highlights matches
   // itself (see ChatConversation), rather than having non-matching rows
   // dropped before it ever sees them, so it needs the full, unfiltered
@@ -128,11 +127,19 @@ export const FigureComponent = ({
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [showHelp])
 
+  // Reset longLoading as soon as status leaves 'loading', without a synchronous
+  // setState in an effect body (which would cause an extra cascading render).
+  // This is the React-documented "adjusting state when a prop changes" pattern:
+  // detect the transition during render and update state immediately, instead
+  // of doing it in a useEffect after commit.
+  const [prevStatus, setPrevStatus] = useState(status)
+  if (status !== prevStatus) {
+    setPrevStatus(status)
+    if (status !== 'loading') setLongLoading(false)
+  }
+
   useEffect(() => {
-    if (status !== 'loading') {
-      setLongLoading(false)
-      return
-    }
+    if (status !== 'loading') return
     const timer = setTimeout((): void => {
       setLongLoading(true)
     }, 1000)
@@ -170,7 +177,7 @@ export const FigureComponent = ({
     <div className='relative max-w overflow-hidden  bg-grey6 rounded-md border-[0.2rem] border-grey4'>
       <div className='flex justify-between'>
         <div className='flex items-center gap-2 p-3'>
-          <div className='font-bold'>{translate(visualization.title, locale)}</div>
+          <div className='font-bold'>{resolveFlatText(visualization.title, locale)}</div>
           {help != null && (
             <button onClick={() => setShowHelp(true)} title={helpMsg} aria-label={helpMsg}>
               <img src={HelpSvg} className='w-5 h-5 cursor-pointer' alt='' />
@@ -191,12 +198,12 @@ export const FigureComponent = ({
             onClick={e => e.stopPropagation()}
           >
             <div className='flex justify-between items-start gap-4'>
-              <div className='font-bold'>{translate(visualization.title, locale)}</div>
+              <div className='font-bold'>{resolveFlatText(visualization.title, locale)}</div>
               <button onClick={() => setShowHelp(false)} className='text-primary font-bold cursor-pointer' aria-label={closeMsg}>
                 {closeMsg}
               </button>
             </div>
-            <div className='mt-3 whitespace-pre-line'>{translate(help, locale)}</div>
+            <div className='mt-3 whitespace-pre-line'>{resolveFlatText(help, locale)}</div>
           </div>
         </div>
       )}
@@ -242,7 +249,7 @@ export const RenderVisualization = memo(
     onSearch: (search: string) => void
     handleDelete: (rowIds: string[]) => void
     handleRestore: (rowIds: string[]) => void
-  }): JSX.Element | null => {
+  }): ReactElement | null => {
     if (visualizationData == null) return null
 
     const fallback = <div className='m-auto font-bodybold text-4xl text-grey2 '>{fallbackMessage}</div>
@@ -278,24 +285,38 @@ export const RenderVisualization = memo(
 )
 
 function prepareTexts (locale: string): Record<string, string> {
+  // de/it/es for the two fork-added strings are provisional machine
+  // translations, like the rest of those locales (see README).
   const texts = {
     errorMsg: {
       en: 'Could not create visualization',
-      nl: 'Kon visualisatie niet maken'
+      nl: 'Kon visualisatie niet maken',
+      de: 'Visualisierung konnte nicht erstellt werden',
+      it: 'Impossibile creare la visualizzazione',
+      es: 'No se ha podido crear la visualización'
     },
     noDataMsg: {
       en: 'No data',
-      nl: 'Geen data'
+      nl: 'Geen data',
+      de: 'Keine Daten',
+      it: 'Nessun dato',
+      es: 'Sin datos'
     },
     helpMsg: {
       en: 'What am I looking at?',
-      nl: 'Wat zie ik hier?'
+      nl: 'Wat zie ik hier?',
+      de: 'Was sehe ich hier?',
+      it: 'Che cosa sto guardando?',
+      es: '¿Qué estoy viendo?'
     },
     closeMsg: {
       en: 'Close',
-      nl: 'Sluiten'
+      nl: 'Sluiten',
+      de: 'Schließen',
+      it: 'Chiudi',
+      es: 'Cerrar'
     }
   }
 
-  return getTranslations(texts, locale)
+  return resolveAllFlat(texts, locale)
 }
