@@ -75,4 +75,79 @@ describe('selectVisualizationColumns', () => {
     const projected = selectVisualizationColumns(makeTable(), visualization)
     expect(projected.body.rows.map((r) => r.id)).toEqual(['r1', 'r2'])
   })
+
+  it('keeps every declared column for a chat_conversation, required and optional', () => {
+    const visualization: VisualizationType = {
+      title: { en: 'conversations' },
+      type: 'chat_conversation',
+      roleColumn: 'category',
+      messageColumn: 'title',
+      timestampColumn: 'date',
+      idColumn: 'url'
+    }
+    const projected = selectVisualizationColumns(makeTable(), visualization)
+    expect(projected.head.cells).toEqual(['category', 'title', 'date', 'url'])
+    expect(projected.body.rows[0].cells).toEqual(['music', 'video one', '2024-01-01', 'https://a.example'])
+  })
+
+  it('omits chat_conversation optionals the visualization did not declare', () => {
+    const visualization: VisualizationType = {
+      title: { en: 'conversations' },
+      type: 'chat_conversation',
+      roleColumn: 'category',
+      messageColumn: 'title'
+    }
+    const projected = selectVisualizationColumns(makeTable(), visualization)
+    expect(projected.head.cells).toEqual(['category', 'title'])
+  })
+
+  // prepareConversationData reads originalBody to render deleted messages as
+  // removed-placeholders; if the projection dropped it they would silently
+  // vanish instead.
+  it('projects originalBody alongside body for a chat_conversation', () => {
+    const table = makeTable()
+    table.originalBody = {
+      rows: [
+        ...table.body.rows,
+        { id: 'r3', cells: ['2024-01-03', 'deleted one', 'https://c.example', '30', 'news'] }
+      ]
+    }
+    const visualization: VisualizationType = {
+      title: { en: 'conversations' },
+      type: 'chat_conversation',
+      roleColumn: 'category',
+      messageColumn: 'title'
+    }
+    const projected = selectVisualizationColumns(table, visualization)
+    expect(projected.originalBody?.rows).toEqual([
+      { id: 'r1', cells: ['music', 'video one'] },
+      { id: 'r2', cells: ['sports', 'video two'] },
+      { id: 'r3', cells: ['news', 'deleted one'] }
+    ])
+  })
+
+  it('leaves out originalBody when the table has none', () => {
+    const visualization: VisualizationType = {
+      title: { en: 'words' },
+      type: 'wordcloud',
+      textColumn: 'title'
+    }
+    const projected = selectVisualizationColumns(makeTable(), visualization)
+    expect(projected).not.toHaveProperty('originalBody')
+  })
+
+  // The heatmap joins each row's full content into rowTexts so the free-text
+  // half of a "word DATE:..." query still matches, so there is nothing to
+  // project away.
+  it('passes the whole table through for a calendar_heatmap', () => {
+    const table = makeTable()
+    const visualization: VisualizationType = {
+      title: { en: 'per day' },
+      type: 'calendar_heatmap',
+      dateColumn: 'date'
+    }
+    const projected = selectVisualizationColumns(table, visualization)
+    expect(projected.head.cells).toEqual(['date', 'title', 'url', 'duration', 'category'])
+    expect(projected.body.rows[0].cells).toHaveLength(5)
+  })
 })
