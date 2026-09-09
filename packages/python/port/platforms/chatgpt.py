@@ -26,6 +26,7 @@ Platform info::
         "time_last_tested": "not yet implemented"
     }
 """
+import json
 import logging
 from collections import Counter
 from typing import Callable
@@ -47,6 +48,7 @@ from port.helpers.table_extractor import (
     load_port_config,
     run_extraction,
 )
+import port.helpers.redact as redact
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +59,7 @@ DDP_CATEGORIES = [
         language=Language.EN,
         known_files=[
             "chat.html",
-            "conversations-000.json",
+            "conversations.json",
             "message_feedback.json",
             "model_comparisons.json",
             "user.json"
@@ -80,20 +82,24 @@ def conversations_to_df(reader: ZipArchiveReader, errors: Counter) -> pd.DataFra
     Returns
     -------
     pd.DataFrame
-        Columns: ``conversation title``, ``role``, ``message``, ``model``, ``time``.
+        Columns: ``conversation title``, ``role``, ``message``, ``model``, ``time``, ``message id``, ``reaction to``, ``content references``, ``search_result_groups``.
         Empty DataFrame when the file is absent or parsing fails.
 
     Table documentation::
 
         {
           "summary": "Each row represents one message turn in a ChatGPT conversation, including the role (user or assistant), the message text, the model used, and the timestamp.",
-          "source_file": "conversations files (conversations-000.json, conversations-001.json, ...)",
+          "source_file": "conversations files (conversations-000.json, conversations-001.json, ... or conversations.json)",
           "columns": {
             "conversation title": "Title of the conversation as stored in the export.",
             "role": "Role of the message author: 'user' or 'assistant'.",
             "message": "Full text of the message.",
             "model": "ChatGPT model slug used to generate the assistant reply.",
-            "time": "ISO 8601 timestamp of when the message was created."
+            "time": "ISO 8601 timestamp of when the message was created.",
+            "message id": "A unique identifier for the message.",
+            "reaction to": "The id of the message this message reacts to. ``client-created-root`` indicates the first message in the chat.",
+            "content references": "Contains content items that are referenced in the message.",
+            "search_result_groups": "Contains the web search result groups (sources) used to ground the message, if any."
           }
         }
 
@@ -101,22 +107,53 @@ def conversations_to_df(reader: ZipArchiveReader, errors: Counter) -> pd.DataFra
 
         {
           "id": "chatgpt_conversations",
+          "show_grid": false,
           "title": {
-            "en": "Your conversations with ChatGPT",
-            "nl": "Uw gesprekken met ChatGPT"
+            "en": "1. Your conversations",
+            "nl": "1. Uw gesprekken"
           },
           "description": {
-            "en": "In this table you find your conversations with ChatGPT sorted by time. Below, you find a wordcloud, where the size of the words represents how frequent these words have been used in the conversations.",
-            "nl": "In deze tabel vind je je gesprekken met ChatGPT gesorteerd op tijd. Hieronder vind je een woordwolk, waarbij de grootte van de woorden aangeeft hoe vaak ze zijn gebruikt in de gesprekken."
+            "en": "Below you find your conversations with ChatGPT. You can review the content of a conversation by clicking on it. You can also search through the conversations by typing in the search box, selecting a period in the timeline, or clicking on words in the word cloud. See the help buttons for each component for further explanation.",
+            "nl": "Hieronder vindt u uw gesprekken met ChatGPT. U kunt de inhoud van een gesprek bekijken door erop te klikken. U kunt ook door de gesprekken zoeken door iets in het zoekvak te typen, een periode in de tijdlijn te selecteren of op woorden in de woordwolk te klikken. Zie de helpknoppen voor elk onderdeel voor meer uitleg."
           },
           "headers": {
             "conversation title": {"en": "Conversation title", "nl": "Gesprektitel"},
             "role": {"en": "Role", "nl": "Rol"},
             "message": {"en": "Message", "nl": "Bericht"},
             "model": {"en": "Model", "nl": "Model"},
-            "time": {"en": "Time", "nl": "Tijd"}
+            "time": {"en": "Time", "nl": "Tijd"},
+            "message id": {"en": "ID", "nl": "ID"},
+            "reaction to": {"en": "Reaction to", "nl": "Reactie op"},
+            "content references": {"en": "Content references", "nl": "Content referenties"},
+            "search_result_groups": {"en": "Search result groups", "nl": "Zoekresultaatgroepen"}
           },
           "visualizations": [
+            {
+              "title": {
+                "en": "Your conversations",
+                "nl": "Uw gesprekken"
+              },
+              "type": "chat_conversation",
+              "roleColumn": "role",
+              "messageColumn": "message",
+              "modelColumn": "model",
+              "timestampColumn": "time",
+              "titleColumn": "conversation title",
+              "referencesColumn": "content references",
+              "sourcesColumn": "search_result_groups",
+              "idColumn": "message id",
+              "reactionToColumn": "reaction to",
+              "height": 500
+            },
+            {
+              "title": {
+                "en": "Your messages over time",
+                "nl": "Uw berichten door de tijd"
+              },
+              "type": "calendar_heatmap",
+              "dateColumn": "time",
+              "row": 1
+            },
             {
               "title": {
                 "en": "Your messages in a wordcloud",
@@ -124,12 +161,13 @@ def conversations_to_df(reader: ZipArchiveReader, errors: Counter) -> pd.DataFra
               },
               "type": "wordcloud",
               "textColumn": "message",
-              "tokenize": true
+              "tokenize": true,
+              "row": 1
             }
           ]
         }
     """
-    results = reader.json_all(r"conversations-.*\.json")
+    results = reader.json_all(r"conversations.*\.json")
     if not results:
         return pd.DataFrame()
     conversations = [conv for result in results for conv in result.data]
@@ -140,7 +178,17 @@ def conversations_to_df(reader: ZipArchiveReader, errors: Counter) -> pd.DataFra
     try:
         for conversation in conversations:
             title = conversation["title"]
-            for _, turn in conversation["mapping"].items():
+            for id, turn in conversation["mapping"].items():
+
+                content_references = []
+                if isinstance(turn.get('message'), dict):
+                    if isinstance(turn['message'].get('metadata'), dict):
+                        content_references = turn['message']['metadata'].get('content_references', [])
+                
+                search_result_groups = []
+                if isinstance(turn.get('message'), dict):
+                    if isinstance(turn['message'].get('metadata'), dict):
+                        search_result_groups = turn['message']['metadata'].get('search_result_groups', [])
 
                 denested_d = eh.dict_denester(turn)
                 is_hidden = eh.find_item(denested_d, "is_visually_hidden_from_conversation")
@@ -148,14 +196,18 @@ def conversations_to_df(reader: ZipArchiveReader, errors: Counter) -> pd.DataFra
                     role = eh.find_item(denested_d, "role")
                     message = "".join(eh.find_items(denested_d, "part"))
                     model = eh.find_item(denested_d, "-model_slug")
+                    reaction_to = eh.find_item(denested_d, "parent")
                     time = eh.epoch_to_iso(eh.find_item(denested_d, "create_time"), errors=errors)
-
                     datapoint = {
                         "conversation title": title,
                         "role": role,
-                        "message": message,
+                        "message": redact.redact(message),
                         "model": model,
                         "time": time,
+                        "message id": id,
+                        "reaction to": reaction_to,
+                        "content references": redact.redact(json.dumps(content_references)),
+                        "search_result_groups": redact.redact(json.dumps(search_result_groups)),
                     }
                     if role != "":
                         datapoints.append(datapoint)

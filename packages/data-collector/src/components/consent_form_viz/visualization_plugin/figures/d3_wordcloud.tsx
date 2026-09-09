@@ -1,22 +1,43 @@
 import React, { useEffect, useMemo, useRef } from "react"
 import cloud from "d3-cloud"
 import stopwords from "./common_stopwords"
-import { TextVisualizationData } from "../types"
+import { TextVisualizationData, Translatable } from "../types"
 
 type Word = { text: string; value: number }
 
 interface Props {
   visualizationData: TextVisualizationData
   nWords?: number
+  search?: string
+  onSearch?: (search: string) => void
 }
 
 const COLORS = ["#444", "#1E3FCC", "#4272EF", "#CC9F3F", "#FFCF60"] as const
 const FONT_FAMILY = "Finador-Bold"
 const FONT_SIZES: [number, number] = [20, 50]
 
-function Wordcloud({ visualizationData, nWords = 100 }: Props): JSX.Element | null {
+// Appends a clicked word to the current search query (as a separate term,
+// deduplicated) rather than replacing it, so clicking multiple words
+// narrows down further instead of starting over each time.
+function addWordToSearch(word: string, current: string): string {
+  const trimmed = current.trim()
+  if (trimmed === "") return word
+  const terms = trimmed.split(/\s+/)
+  if (terms.some(t => t.toLowerCase() === word.toLowerCase())) return trimmed
+  return `${trimmed} ${word}`
+}
+
+function Wordcloud({ visualizationData, nWords = 100, search = "", onSearch }: Props): JSX.Element | null {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const svgRef = useRef<SVGSVGElement | null>(null)
+  // Read via refs inside the click handler below instead of depending on
+  // [search, onSearch] in the layout effect - re-running the (expensive)
+  // cloud layout on every keystroke in the search box would be wasteful
+  // and would reshuffle word positions while the user is typing.
+  const searchRef = useRef(search)
+  const onSearchRef = useRef(onSearch)
+  searchRef.current = search
+  onSearchRef.current = onSearch
 
   // derive words from visualizationData
   const words: Word[] = useMemo(() => {
@@ -64,6 +85,12 @@ function Wordcloud({ visualizationData, nWords = 100 }: Props): JSX.Element | nu
         t.setAttribute("text-anchor", "middle")
         t.setAttribute("transform", `translate(${word.x},${word.y})`)
         t.textContent = word.text
+        if (onSearchRef.current != null) {
+          t.style.cursor = "pointer"
+          t.addEventListener("click", () => {
+            onSearchRef.current?.(addWordToSearch(word.text, searchRef.current))
+          })
+        }
         g.appendChild(t)
       })
       svg.appendChild(g)
@@ -136,6 +163,14 @@ function Wordcloud({ visualizationData, nWords = 100 }: Props): JSX.Element | nu
       <svg ref={svgRef} style={{ width: "100%", height: "100%" }} />
     </div>
   )
+}
+
+// Explanation shown in the help overlay of this visualization (see the help
+// button next to the title in figure.tsx). Module-level rather than inside
+// the component because the overlay is rendered by the surrounding figure.
+export const helpText: Translatable = {
+  en: 'These are the words that appear most often in your data, where a bigger word means it was used more frequently. Very common words such as "the" and "and" are left out. Clicking a word adds it to the search, so the other visualizations and the table only show items containing that word; clicking more words narrows the selection further.',
+  nl: 'Dit zijn de woorden die het vaakst in jouw gegevens voorkomen, waarbij een groter woord betekent dat het vaker is gebruikt. Veelvoorkomende woorden zoals "de" en "en" worden weggelaten. Klik op een woord om het aan de zoekopdracht toe te voegen, zodat de andere visualisaties en de tabel alleen items met dat woord tonen; door meer woorden aan te klikken maak je de selectie steeds smaller.'
 }
 
 export default Wordcloud
