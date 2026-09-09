@@ -85,10 +85,12 @@ test('can undo row removal before submission', async ({ page }) => {
   await page.getByText(/^Delete/).first().click();
   await expect(table.getByText('hello_world.txt')).not.toBeVisible();
 
-  // Click the undo icon next to the "1 deleted" label in the table summary
-  // (an unlabeled <img> with an inlined data-URI src — see follow-up to add
-  // button semantics/testids to the consent viz table)
-  await page.getByText('1 deleted').locator('img').click();
+  // Click the undo icon next to the "1 rows have been deleted" label in the
+  // table summary — this study keeps its own fuller wording for that label
+  // rather than upstream's bare "deleted" (see table_items.tsx). The icon is
+  // an unlabeled <img> with an inlined data-URI src — see follow-up to add
+  // button semantics/testids to the consent viz table.
+  await page.getByText(/^1 rows have been deleted$/).locator('img').click();
 
   // Verify the deleted file is visible again (.first(): the filename shows
   // in both the filename and basename columns)
