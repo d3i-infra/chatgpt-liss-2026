@@ -61,6 +61,7 @@ DDP_CATEGORIES = [
         known_files=[
             "chat.html",
             "conversations.json",
+            "conversations-000.json",
             "message_feedback.json",
             "model_comparisons.json",
             "user.json"
@@ -168,7 +169,7 @@ def conversations_to_df(reader: ZipArchiveReader, errors: Counter) -> pd.DataFra
           ]
         }
     """
-    results = reader.json_all(r"conversations.*\.json")
+    results = reader.json_all(r"^conversations.*\.json")
     if not results:
         return pd.DataFrame()
     conversations = [conv for result in results for conv in result.data]
@@ -178,7 +179,9 @@ def conversations_to_df(reader: ZipArchiveReader, errors: Counter) -> pd.DataFra
 
     try:
         for conversation in conversations:
-            title = conversation["title"]
+            title = conversation.get("title", "<no title>")
+            if not isinstance(conversation.get("mapping"), dict):
+                continue #not a valid conversation file, skip it
             for id, turn in conversation["mapping"].items():
 
                 content_references = []
@@ -192,10 +195,14 @@ def conversations_to_df(reader: ZipArchiveReader, errors: Counter) -> pd.DataFra
                         search_result_groups = turn['message']['metadata'].get('search_result_groups', [])
 
                 denested_d = eh.dict_denester(turn)
+                message = eh.find_item(denested_d, "part")
+                if isinstance(message, list):
+                    message = " ".join(part for part in message if isinstance(part, str))
+
                 is_hidden = eh.find_item(denested_d, "is_visually_hidden_from_conversation")
                 if is_hidden != "True":
                     role = eh.find_item(denested_d, "role")
-                    message = "".join(eh.find_items(denested_d, "part"))
+                    message = message
                     model = eh.find_item(denested_d, "-model_slug")
                     reaction_to = eh.find_item(denested_d, "parent")
                     time = eh.epoch_to_iso(eh.find_item(denested_d, "create_time"), errors=errors)
