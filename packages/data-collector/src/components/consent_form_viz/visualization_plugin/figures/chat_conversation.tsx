@@ -18,6 +18,7 @@ import {
 import { resolveAllFlat as getTranslations } from '../../../../locale/text'
 import { matchesQuery, queryTerms } from '../searchMatch'
 import { buildLiteBlocks, InputSegment, LiteBlock, LiteInlineChild } from './liteMarkdown'
+import { genuiToMarkdown } from './genuiMarkup'
 import RemoveSvg from '../../assets/images/remove.svg'
 import UndoSvg from '../../assets/images/undo.svg'
 import BackSvg from '../../assets/images/back.svg'
@@ -646,6 +647,10 @@ type ReferenceSegment =
   | { kind: 'map', places: MapPlace[], raw: unknown }
   | { kind: 'images', count: number, raw: unknown }
   | { kind: 'widget', name: string, raw: unknown }
+  // A marker ChatGPT itself doesn't show (its content_references slot is
+  // "hidden" - see hiddenMarkerIndices). Still rendered, since participants
+  // should see everything they donate, but visibly marked as hidden.
+  | { kind: 'hidden', segment: ReferenceSegment }
   // Catch-all for marker keywords and content_reference types this parser
   // doesn't otherwise recognize (a future ChatGPT export format change, or
   // any keyword-resolver below bottoming out with nothing useful to show):
@@ -675,6 +680,8 @@ interface Labels {
   mapLabel: string
   unknownLabel: string
   entityLabel: string
+  hiddenLabel: string
+  hiddenTitle: string
 }
 
 // Content reference elements (map/images/widget/entity-without-a-link) open
@@ -685,7 +692,7 @@ const clickableRef = 'cursor-pointer hover:ring-2 hover:ring-primary/40'
 const matchedRef = 'ring-2 ring-tertiary bg-tertiary/40'
 
 function MessageContent ({ message, references, locale, searchQuery = '', onShowRaw }: MessageContentProps) {
-  const segments = resolveMessageReferences(message, references)
+  const segments = resolveMessageReferences(genuiToMarkdown(message), references)
   const blocks = buildLiteBlocks(segments)
   const query = searchQuery.trim()
   const labels = getTranslations({
@@ -694,6 +701,11 @@ function MessageContent ({ message, references, locale, searchQuery = '', onShow
     mapLabel: { en: 'Map', nl: 'Kaart' },
     unknownLabel: { en: 'Unknown', nl: 'Onbekend' },
     entityLabel: { en: 'Entity', nl: 'Entiteit' },
+    hiddenLabel: { en: 'Hidden', nl: 'Verborgen' },
+    hiddenTitle: {
+      en: 'This item is present in your data, but ChatGPT hides it from view.',
+      nl: 'Dit onderdeel staat in jouw gegevens, maar ChatGPT verbergt het in de weergave.',
+    },
   }, locale) as unknown as Labels
 
   const elements: Array<ReturnType<typeof renderBlock>> = []
@@ -825,8 +837,32 @@ function renderInline (child: LiteInlineChild<ReferenceSegment>, labels: Labels,
   }
 }
 
-function renderReference (segment: ReferenceSegment, { imagesLabel, widgetLabel, mapLabel, unknownLabel, entityLabel }: Labels, query: string, onShowRaw: (data: unknown, parentLabel: string) => void) {
+function renderReference (segment: ReferenceSegment, labels: Labels, query: string, onShowRaw: (data: unknown, parentLabel: string) => void) {
+  const { imagesLabel, widgetLabel, mapLabel, unknownLabel, entityLabel, hiddenLabel, hiddenTitle } = labels
   switch (segment.kind) {
+    case 'hidden': {
+      // Text-like references flow inline with the message. Chip-like ones
+      // (images, widget, unknown) carry their own margin and padding, which a
+      // plain inline box doesn't contain, and a map is a full-width block.
+      const inner = segment.segment.kind
+      const layout = inner === 'map'
+        ? 'flex flex-col my-1'
+        : inner === 'url' || inner === 'video' || inner === 'citation' || inner === 'entity'
+          ? 'inline'
+          : 'inline-flex items-center align-middle'
+      return (
+        <span className={`${layout} rounded border border-dashed border-warning bg-warninglight px-0.5`}>
+          {renderReference(segment.segment, labels, query, onShowRaw)}
+          <span
+            title={hiddenTitle}
+            className='mx-1 whitespace-nowrap px-0.5 py-0.5 text-[0.8rem] font-semibold italic text-warning cursor-help underline decoration-dotted underline-offset-2'
+          >
+            {hiddenLabel}
+          </span>
+        </span>
+      )
+    }
+
     case 'entity':
       return <EntityChip segment={segment} query={query} onShowRaw={onShowRaw} parentLabel={`${entityLabel}: ${segment.name}`} />
 
@@ -1276,8 +1312,9 @@ function DetailsScreen ({ data, searchQuery = '' }: { data: unknown, searchQuery
 // resolveGenui). Markers of type "map" are bare/opaque and are resolved
 // against the message's content_references array positionally: the Nth
 // "map" marker corresponds to the Nth "map"-typed content_references entry,
-// because entries whose type has no marker equivalent (hidden,
-// sources_footnote, followup_a) never consume a cursor slot. "video" markers
+// because entries whose type has no marker equivalent (sources_footnote,
+// followup_a) never consume a cursor slot, and a marker whose own slot is
+// "hidden" takes no entry at all (see hiddenMarkerIndices). "video" markers
 // are the odd one out: despite their own marker keyword, they resolve
 // against content_references entries whose own type is "alt_text", not
 // "video". A bare "genui" marker with no inline payload is resolved the same
@@ -1345,20 +1382,34 @@ class ReferenceCursor {
     return type === 'webpage' ? 'grouped_webpages' : type
   }
 
+  // Set while resolving a marker whose slot is "hidden" (see
+  // hiddenMarkerIndices): that slot has no data entry of its own, so the
+  // marker mustn't take the entry belonging to a later marker of its type.
+  inHiddenSlot = false
+
   next (type: string): ContentReference | undefined {
+    if (this.inHiddenSlot) return undefined
     return this.buckets.get(ReferenceCursor.bucketKey(type))?.shift()
   }
 
-  // Finds and removes the first "grouped_webpages" entry covering at least
-  // one of the given ref tokens (see webpageRefTokens), rather than just
-  // taking whichever one is next in array order - see resolveCitation for
-  // why occurrence order can't be relied on here.
+  private readonly usedWebpages = new Set<ContentReference>()
+
+  // Finds the first "grouped_webpages" entry covering at least one of the
+  // given ref tokens (see webpageRefTokens), rather than just taking
+  // whichever one is next in array order - see resolveCitation for why
+  // occurrence order can't be relied on here. Entries aren't consumed:
+  // ChatGPT can merge a repeat citation into the previous citation's entry
+  // (its `refs` then repeat the shared token) and give the repeat a "hidden"
+  // slot, so that later marker must still be able to match the merged entry
+  // to show its source. An entry not yet matched by an earlier marker is
+  // preferred when several cover the same token.
   takeMatchingWebpage (tokens: Set<string>): ContentReferenceGroupedWebpages | undefined {
     const bucket = this.buckets.get('grouped_webpages')
     if (bucket == null) return undefined
-    const index = bucket.findIndex(ref => webpageRefTokens(ref as ContentReferenceGroupedWebpages).some(t => tokens.has(t)))
-    if (index === -1) return undefined
-    return bucket.splice(index, 1)[0] as ContentReferenceGroupedWebpages
+    const matches = bucket.filter(ref => webpageRefTokens(ref as ContentReferenceGroupedWebpages).some(t => tokens.has(t)))
+    const ref = matches.find(m => !this.usedWebpages.has(m)) ?? matches[0]
+    if (ref != null) this.usedWebpages.add(ref)
+    return ref as ContentReferenceGroupedWebpages | undefined
   }
 }
 
@@ -1387,8 +1438,10 @@ function resolveMessageReferences (
   const cursor = new ReferenceCursor(references ?? [])
   const entityRegistry: EntityRegistry = new Map()
   const segments: MessageSegment[] = []
+  const hiddenMarkers = hiddenMarkerIndices(message, references ?? [])
 
   let lastIndex = 0
+  let markerIndex = 0
   MARKER_RE.lastIndex = 0
   let match: RegExpExecArray | null
 
@@ -1400,7 +1453,14 @@ function resolveMessageReferences (
     const [keyword, ...params] = match[1] != null
       ? [match[1], ...match[2].split(FIELD_SEP).filter(p => p !== '')]
       : match[3].split(FIELD_SEP)
-    segments.push({ kind: 'ref', segment: resolveMarker(keyword, params, cursor, entityRegistry) })
+    const hidden = hiddenMarkers.has(markerIndex++)
+    cursor.inHiddenSlot = hidden
+    const segment = resolveMarker(keyword, params, match[0], cursor, entityRegistry)
+    // Only label what is actually rendered: a hidden self-citation of an
+    // entity resolves to an empty citation (see resolveCitation), which
+    // shows nothing, so there is nothing to mark as hidden either.
+    const marked = hidden && !(segment.kind === 'citation' && segment.sources.length === 0)
+    segments.push({ kind: 'ref', segment: marked ? { kind: 'hidden', segment } : segment })
 
     lastIndex = match.index + match[0].length
   }
@@ -1412,7 +1472,28 @@ function resolveMessageReferences (
   return segments
 }
 
-function resolveMarker (keyword: string, params: string[], cursor: ReferenceCursor, entityRegistry: EntityRegistry): ReferenceSegment {
+// Content reference types that never back a marker of their own.
+const NON_MARKER_REFERENCE_TYPES = new Set(['sources_footnote', 'followup_a'])
+
+// Indices of the markers ChatGPT doesn't show in its own interface. Apart
+// from the types above, content_references holds one entry per marker, in
+// marker order, and a marker ChatGPT leaves out gets a "hidden" entry in its
+// slot - observed for a "map" without place data, the Google Maps "url" link
+// following a map that is shown, a repeat "cite" whose source was merged
+// into the previous citation's entry, and a "cite" re-citing an entity
+// introduced earlier in the message. These markers are still rendered (see
+// the 'hidden' ReferenceSegment), just marked as such. Positions are only
+// trusted when the marker and entry counts match: some exports have markers
+// without an entry of their own (see the entity self-citations in the module
+// comment), which would shift every later slot and mark the wrong marker.
+function hiddenMarkerIndices (message: string, references: ContentReference[]): Set<number> {
+  const slots = references.filter(ref => !NON_MARKER_REFERENCE_TYPES.has(ref.type))
+  if (!slots.some(ref => ref.type === 'hidden')) return new Set()
+  if ((message.match(MARKER_RE)?.length ?? 0) !== slots.length) return new Set()
+  return new Set(slots.flatMap((ref, i) => ref.type === 'hidden' ? [i] : []))
+}
+
+function resolveMarker (keyword: string, params: string[], marker: string, cursor: ReferenceCursor, entityRegistry: EntityRegistry): ReferenceSegment {
   switch (keyword) {
     case 'entity':
       return resolveEntity(params, cursor, entityRegistry)
@@ -1423,7 +1504,7 @@ function resolveMarker (keyword: string, params: string[], cursor: ReferenceCurs
     case 'cite':
       return resolveCitation(params, cursor, entityRegistry)
     case 'map':
-      return resolveMap(cursor)
+      return resolveMap(marker, cursor)
     case 'image_group':
       return resolveImageGroup(params, cursor)
     case 'genui':
@@ -1539,12 +1620,14 @@ function resolveCitation (params: string[], cursor: ReferenceCursor, entityRegis
   // rawData state below), so this still needs a placeholder object here
   // rather than null, or clicking the resulting pill would silently do
   // nothing.
-  return { kind: 'unknown', keyword: 'cite', raw: ref ?? { note: 'No matching content reference found', params } }
+  return { kind: 'unknown', keyword: 'cite', raw: ref ?? { note: `No matching content reference found`, params } }
 }
 
-function resolveMap (cursor: ReferenceCursor): ReferenceSegment {
+// `marker` is the original marker text in the message, shown in the
+// placeholder's inspect popup when no content_references entry backs it.
+function resolveMap (marker: string, cursor: ReferenceCursor): ReferenceSegment {
   const ref = cursor.next('map') as ContentReferenceMap | undefined
-  if (ref == null) return { kind: 'unknown', keyword: 'map', raw: { note: 'No matching content reference found' } }
+  if (ref == null) return { kind: 'unknown', keyword: 'map', raw: { note: `No matching content reference found for ${marker}` } }
 
   const places: MapPlace[] = (ref.entities ?? []).map(e => ({
     name: e.entity?.name ?? e.name,
