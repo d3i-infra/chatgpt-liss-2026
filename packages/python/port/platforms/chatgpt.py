@@ -70,6 +70,31 @@ DDP_CATEGORIES = [
 ]
 
 
+def shown_message_ids(conversation: dict) -> set[str] | None:
+    """Return the ids of the messages ChatGPT shows in a conversation.
+
+    A conversation is a tree: regenerating a reply, editing a prompt or
+    picking one of two compared replies adds a sibling branch under the same
+    parent. ChatGPT shows only the path from ``current_node`` back to the
+    root; every message off that path is hidden from the conversation.
+
+    Returns None when that path can't be determined (no or unknown
+    ``current_node``), so callers don't mark anything as hidden.
+    """
+    mapping = conversation["mapping"]
+    node_id = conversation.get("current_node")
+    if not isinstance(node_id, str) or node_id not in mapping:
+        return None
+
+    shown: set[str] = set()
+    # The shown check guards against a cyclic parent chain in malformed data.
+    while isinstance(node_id, str) and node_id in mapping and node_id not in shown:
+        shown.add(node_id)
+        node = mapping[node_id]
+        node_id = node.get("parent") if isinstance(node, dict) else None
+    return shown
+
+
 def conversations_to_df(reader: ZipArchiveReader, errors: Counter) -> pd.DataFrame:
     """Extract all ChatGPT conversations into a DataFrame.
 
@@ -84,7 +109,7 @@ def conversations_to_df(reader: ZipArchiveReader, errors: Counter) -> pd.DataFra
     Returns
     -------
     pd.DataFrame
-        Columns: ``conversation title``, ``role``, ``message``, ``model``, ``time``, ``message id``, ``reaction to``, ``content references``, ``search_result_groups``.
+        Columns: ``conversation title``, ``role``, ``message``, ``model``, ``time``, ``message id``, ``reaction to``, ``hidden``, ``content references``, ``search_result_groups``.
         Empty DataFrame when the file is absent or parsing fails.
 
     Table documentation::
@@ -100,6 +125,7 @@ def conversations_to_df(reader: ZipArchiveReader, errors: Counter) -> pd.DataFra
             "time": "ISO 8601 timestamp of when the message was created.",
             "message id": "A unique identifier for the message.",
             "reaction to": "The id of the message this message reacts to. ``client-created-root`` indicates the first message in the chat.",
+            "hidden": "True when ChatGPT doesn't show the message in the conversation: it is on another branch than the one currently shown, e.g. an earlier version of a regenerated reply, a reply to an edited prompt, or the reply not picked when two were compared. False when shown, or when the export doesn't say which branch is shown.",
             "content references": "Contains content items that are referenced in the message.",
             "search_result_groups": "Contains the web search result groups (sources) used to ground the message, if any."
           }
@@ -126,6 +152,7 @@ def conversations_to_df(reader: ZipArchiveReader, errors: Counter) -> pd.DataFra
             "time": {"en": "Time", "nl": "Tijd"},
             "message id": {"en": "ID", "nl": "ID"},
             "reaction to": {"en": "Reaction to", "nl": "Reactie op"},
+            "hidden": {"en": "Hidden", "nl": "Verborgen"},
             "content references": {"en": "Content references", "nl": "Content referenties"},
             "search_result_groups": {"en": "Search result groups", "nl": "Zoekresultaatgroepen"}
           },
@@ -145,6 +172,7 @@ def conversations_to_df(reader: ZipArchiveReader, errors: Counter) -> pd.DataFra
               "sourcesColumn": "search_result_groups",
               "idColumn": "message id",
               "reactionToColumn": "reaction to",
+              "hiddenColumn": "hidden",
               "height": 500
             },
             {
@@ -182,6 +210,7 @@ def conversations_to_df(reader: ZipArchiveReader, errors: Counter) -> pd.DataFra
             title = conversation.get("title", "<no title>")
             if not isinstance(conversation.get("mapping"), dict):
                 continue #not a valid conversation file, skip it
+            shown_ids = shown_message_ids(conversation)
             for id, turn in conversation["mapping"].items():
 
                 content_references = []
@@ -214,6 +243,7 @@ def conversations_to_df(reader: ZipArchiveReader, errors: Counter) -> pd.DataFra
                         "time": time,
                         "message id": id,
                         "reaction to": reaction_to,
+                        "hidden": shown_ids is not None and id not in shown_ids,
                         "content references": redact.redact(json.dumps(content_references)),
                         "search_result_groups": redact.redact(json.dumps(search_result_groups)),
                     }
@@ -270,8 +300,8 @@ class ChatGPTFlow(FlowBuilder):
     def validate_file(self, file):
         return validate.validate_zip(DDP_CATEGORIES, file)
 
-    def extract_data(self, file_value, validation):
-        return extraction(file_value, validation)
+    def extract_data(self, file, validation):
+        return extraction(file, validation)
 
 
 def process(session_id):

@@ -83,11 +83,12 @@ describe('selectVisualizationColumns', () => {
       roleColumn: 'category',
       messageColumn: 'title',
       timestampColumn: 'date',
-      idColumn: 'url'
+      idColumn: 'url',
+      hiddenColumn: 'duration'
     }
     const projected = selectVisualizationColumns(makeTable(), visualization)
-    expect(projected.head.cells).toEqual(['category', 'title', 'date', 'url'])
-    expect(projected.body.rows[0].cells).toEqual(['music', 'video one', '2024-01-01', 'https://a.example'])
+    expect(projected.head.cells).toEqual(['category', 'title', 'date', 'url', 'duration'])
+    expect(projected.body.rows[0].cells).toEqual(['music', 'video one', '2024-01-01', 'https://a.example', '10'])
   })
 
   it('omits chat_conversation optionals the visualization did not declare', () => {

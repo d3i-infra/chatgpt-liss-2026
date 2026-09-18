@@ -73,7 +73,8 @@ function visualizationColumns (visualization: VisualizationType): string[] | typ
       conversation.referencesColumn,
       conversation.sourcesColumn,
       conversation.idColumn,
-      conversation.reactionToColumn
+      conversation.reactionToColumn,
+      conversation.hiddenColumn
     ]) {
       if (column !== undefined) columns.add(column)
     }

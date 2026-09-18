@@ -20,6 +20,7 @@ module.exports = {
       successlight: "#EBFFDF",
       warning: "#F28D15",
       warninglight: "#FFEFDC",
+      warningdark: "#bd6902",
       delete: "#DB1E1E",
       deletelight: "#FFECEC",
       error: "#DB1E1E",

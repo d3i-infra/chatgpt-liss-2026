@@ -1,4 +1,4 @@
-import { Fragment, JSX, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { Fragment, JSX, ReactNode, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import Highlighter from 'react-highlight-words'
 import {
@@ -13,8 +13,10 @@ import {
   ContentReferenceDil,
   ContentReferenceUrl,
   ContentReferenceAltText,
+  ContentReferenceNavList,
   Translatable,
 } from '../types'
+import { formatShortDate } from '../visualizationDataFunctions/util'
 import { resolveAllFlat as getTranslations } from '../../../../locale/text'
 import { matchesQuery, queryTerms } from '../searchMatch'
 import { buildLiteBlocks, InputSegment, LiteBlock, LiteInlineChild } from './liteMarkdown'
@@ -28,6 +30,7 @@ import WidgetSvg from '../../assets/images/widget.svg'
 import LinkSvg from '../../assets/images/link.svg'
 import EntitySvg from '../../assets/images/entity.svg'
 import InspectSvg from '../../assets/images/gear.svg'
+import HelpSvg from '../../assets/images/help.svg'
 
 // This file renders ChatGPT export conversations end to end: the
 // conversation/message list UI, ChatGPT's private-use-area reference-marker
@@ -236,7 +239,7 @@ export default function ChatConversation ({ visualizationData, locale, search, h
     setScreenStack([{ kind: 'messages' }])
   }, [visualizationData])
 
-  const { selectMsg, noDataMsg, deletedMsg, sourcesMsg, detailsMsg, referenceDataMsg, sourceDataMsg, messageLabel, backMsg, removeMsg, restoreMsg, removedPlaceholderMsg, youMsg, assistantMsg } = getTranslations({
+  const { selectMsg, noDataMsg, deletedMsg, sourcesMsg, detailsMsg, referenceDataMsg, sourceDataMsg, messageLabel, backMsg, removeMsg, restoreMsg, removedPlaceholderMsg, youMsg, assistantMsg, hiddenMsgLabel, hiddenMsgTitle } = getTranslations({
     selectMsg: { en: 'Select a conversation', nl: 'Selecteer een gesprek' },
     noDataMsg: { en: 'No messages', nl: 'Geen berichten' },
     deletedMsg: { en: 'Delete', nl: 'Verwijder' },
@@ -250,7 +253,12 @@ export default function ChatConversation ({ visualizationData, locale, search, h
     restoreMsg: { en: 'Restore message', nl: 'Herstel bericht' },
     removedPlaceholderMsg: { en: '<message removed>', nl: '<bericht verwijderd>' },
     youMsg: { en: 'You', nl: 'Jij' },
-    assistantMsg: { en: 'Assistant', nl: 'Assistent' }
+    assistantMsg: { en: 'Assistant', nl: 'Assistent' },
+    hiddenMsgLabel: { en: 'Hidden', nl: 'Verborgen' },
+    hiddenMsgTitle: {
+      en: 'This message is present in your chat data, but ChatGPT did not show it during the original conversation.',
+      nl: 'Dit bericht is aanwezig in je chatgegevens, maar ChatGPT heeft het niet aan je getoond tijdens het oorspronkelijke gesprek.',
+    },
   }, locale)
 
   function deleteConversation (conv: Conversation): void {
@@ -391,6 +399,12 @@ export default function ChatConversation ({ visualizationData, locale, search, h
               // placeholder with a restore button and its original content,
               // sources and references withheld.
               const isRemoved = msg.removed ?? false
+              // On a branch ChatGPT doesn't show (see prepareConversationData):
+              // still rendered in full, but visibly marked as hidden.
+              const isHidden = !isRemoved && (msg.hidden ?? false)
+              // A hidden message's "Hidden" label sits in a gap in its dashed
+              // border, which a fieldset's legend gives natively.
+              const Bubble = isHidden ? 'fieldset' : 'div'
               const messageSources = msg.sources?.flatMap(group => group.entries ?? group.items ?? []) ?? []
               const sourcesMatched = matchesQuery(msg.sources, query)
               const detailsMatched = matchesQuery(msg.references, query)
@@ -400,15 +414,25 @@ export default function ChatConversation ({ visualizationData, locale, search, h
                   data-msg-id={msg.id}
                   className={`flex flex-col max-w-[90%] py-1 ${isUser ? 'self-end items-end' : 'self-start items-start'}`}
                 >
-                  <div
-                    className={`px-3 py-2 w-full rounded-2xl text-sm whitespace-pre-wrap break-words ${
+                  <Bubble
+                    className={`px-3 w-full rounded-2xl text-sm whitespace-pre-wrap break-words ${
                       isRemoved
-                        ? 'bg-grey5 text-grey2 italic'
-                        : isUser
-                          ? 'bg-primary text-white rounded-br-sm'
-                          : 'bg-grey4 text-black rounded-bl-sm'
+                        ? 'py-2 bg-grey5 text-grey2 italic'
+                        : isHidden
+                          // min-w-0: a fieldset otherwise can't shrink below
+                          // its content, so a wide table or news row would
+                          // stretch it instead of scrolling.
+                          ? `min-w-0 pb-2 border border-dashed border-warning bg-warninglight text-black ${isUser ? 'rounded-br-sm' : 'rounded-bl-sm'}`
+                          : isUser
+                          ? 'py-2 bg-primary text-white rounded-br-sm'
+                          : 'py-2 bg-grey4 text-black rounded-bl-sm'
                     }`}
                   >
+                    {isHidden && (
+                      <legend className='ml-1 mb-1 px-1'>
+                        <HiddenLabel label={hiddenMsgLabel} explanation={hiddenMsgTitle} />
+                      </legend>
+                    )}
                     {isRemoved
                       ? removedPlaceholderMsg
                       : (
@@ -420,7 +444,7 @@ export default function ChatConversation ({ visualizationData, locale, search, h
                           onShowRaw={(data, parentLabel) => pushScreen({ kind: 'details', data, parentLabel })}
                         />
                         )}
-                  </div>
+                  </Bubble>
                   <div className='flex items-start gap-2 mt-0.5 px-1'>
                     <span className="text-xs italic text-grey2">
                       {!isUser && isRemoved && assistantMsg}
@@ -639,12 +663,21 @@ interface MapPlace {
   rating?: number
 }
 
+interface NewsArticle {
+  title?: string
+  url?: string
+  attribution?: string
+  pubDate?: Date
+}
+
 type ReferenceSegment =
   | { kind: 'entity', name: string, disambiguation?: string, url?: string, raw: unknown }
   | { kind: 'url', text: string, href?: string }
   | { kind: 'video', text: string, href?: string }
   | { kind: 'citation', sources: CitationSource[] }
   | { kind: 'map', places: MapPlace[], raw: unknown }
+  // The marker's title isn't shown by ChatGPT; kept as the row's accessible name.
+  | { kind: 'navlist', title?: string, articles: NewsArticle[] }
   | { kind: 'images', count: number, raw: unknown }
   | { kind: 'widget', name: string, raw: unknown }
   // A marker ChatGPT itself doesn't show (its content_references slot is
@@ -682,6 +715,9 @@ interface Labels {
   entityLabel: string
   hiddenLabel: string
   hiddenTitle: string
+  // Not a label, but carried along with them for references that format
+  // dates themselves (navlist).
+  locale: string
 }
 
 // Content reference elements (map/images/widget/entity-without-a-link) open
@@ -695,7 +731,7 @@ function MessageContent ({ message, references, locale, searchQuery = '', onShow
   const segments = resolveMessageReferences(genuiToMarkdown(message), references)
   const blocks = buildLiteBlocks(segments)
   const query = searchQuery.trim()
-  const labels = getTranslations({
+  const translations = getTranslations({
     imagesLabel: { en: 'Images', nl: 'Afbeeldingen' },
     widgetLabel: { en: 'Widget', nl: 'Widget' },
     mapLabel: { en: 'Map', nl: 'Kaart' },
@@ -703,10 +739,11 @@ function MessageContent ({ message, references, locale, searchQuery = '', onShow
     entityLabel: { en: 'Entity', nl: 'Entiteit' },
     hiddenLabel: { en: 'Hidden', nl: 'Verborgen' },
     hiddenTitle: {
-      en: 'This item is present in your data, but ChatGPT hides it from view.',
-      nl: 'Dit onderdeel staat in jouw gegevens, maar ChatGPT verbergt het in de weergave.',
+      en: 'This item is present in your chat data, but ChatGPT did not show it to you in the original conversation.',
+      nl: 'Dit item is aanwezig in je chatgegevens, maar ChatGPT heeft het niet aan je getoond in het oorspronkelijke gesprek.',
     },
-  }, locale) as unknown as Labels
+  }, locale) as unknown as Omit<Labels, 'locale'>
+  const labels: Labels = { ...translations, locale }
 
   const elements: Array<ReturnType<typeof renderBlock>> = []
   let listBuffer: Array<{ children: Array<LiteInlineChild<ReferenceSegment>> }> = []
@@ -841,25 +878,28 @@ function renderReference (segment: ReferenceSegment, labels: Labels, query: stri
   const { imagesLabel, widgetLabel, mapLabel, unknownLabel, entityLabel, hiddenLabel, hiddenTitle } = labels
   switch (segment.kind) {
     case 'hidden': {
-      // Text-like references flow inline with the message. Chip-like ones
-      // (images, widget, unknown) carry their own margin and padding, which a
-      // plain inline box doesn't contain, and a map is a full-width block.
+      // Same look as a hidden message: a dashed box with the "Hidden" label
+      // in a gap at the top left of its border, which a fieldset's legend
+      // gives natively. A map or navlist is a full-width block. Everything
+      // else stays within the line of text as an inline-block: a fieldset
+      // can't break across lines,
+      // so a long hidden link wraps inside its own box instead. Text-like
+      // references sit on the text's baseline; chips are centred on the line.
       const inner = segment.segment.kind
-      const layout = inner === 'map'
-        ? 'flex flex-col my-1'
+      const isBlock = inner === 'map' || inner === 'navlist'
+      const layout = isBlock
+        ? 'block my-1 px-1'
         : inner === 'url' || inner === 'video' || inner === 'citation' || inner === 'entity'
-          ? 'inline'
-          : 'inline-flex items-center align-middle'
+          ? 'inline-block align-baseline max-w-full px-0.5'
+          : 'inline-block align-middle max-w-full px-0.5'
       return (
-        <span className={`${layout} rounded border border-dashed border-warning bg-warninglight px-0.5`}>
+        // min-w-0: a fieldset otherwise can't shrink below its content.
+        <fieldset className={`${layout} min-w-0 pb-0.5 rounded border border-dashed border-warning bg-warninglight`}>
+          <legend className='ml-0.5 px-0.5'>
+            <HiddenLabel label={hiddenLabel} explanation={hiddenTitle} />
+          </legend>
           {renderReference(segment.segment, labels, query, onShowRaw)}
-          <span
-            title={hiddenTitle}
-            className='mx-1 whitespace-nowrap px-0.5 py-0.5 text-[0.8rem] font-semibold italic text-warning cursor-help underline decoration-dotted underline-offset-2'
-          >
-            {hiddenLabel}
-          </span>
-        </span>
+        </fieldset>
       )
     }
 
@@ -926,6 +966,9 @@ function renderReference (segment: ReferenceSegment, labels: Labels, query: stri
           ))}
         </span>
       )
+
+    case 'navlist':
+      return <NewsCarousel segment={segment} locale={labels.locale} query={query} />
 
     case 'images':
       return (
@@ -1001,15 +1044,22 @@ function renderCitationEntry (entry: CitationWebpage, key: string | number) {
   )
 }
 
-// Shared hover/tap-to-reveal popover state for a citation source's link,
-// used both by the standalone CitationPill (a dedicated link pill, for
-// "cite" citations) and by EntityChip below (triggered by hovering the
-// entity chip itself, with no separate pill needed - matching how ChatGPT's
-// own UI surfaces an entity's link; see resolveCitation's module comment
-// for why entity self-citations don't get their own citation marker).
-// Extracted so the interaction (positioning, hover-vs-tap behavior) is only
-// implemented once; callers wire wrapperRef/openTooltip/closeTooltip onto
-// whatever their own trigger element is.
+// Shared popover anchored to a trigger in the message panel. Used for a
+// citation source's link (see useCitationTooltip below), both by the
+// standalone CitationPill (a dedicated link pill, for "cite" citations) and
+// by EntityChip (triggered by hovering the entity chip itself, with no
+// separate pill needed - matching how ChatGPT's own UI surfaces an entity's
+// link; see resolveCitation's module comment for why entity self-citations
+// don't get their own citation marker), and for the explanation behind a
+// "Hidden" label (see HiddenLabel). Extracted so the interaction
+// (positioning, hover-vs-tap behavior) is only implemented once; callers
+// wire wrapperRef/openTooltip/closeTooltip onto whatever their own trigger
+// element is.
+//
+// With openOnClick, the popover is opened by a click on every device and
+// stays open until the next click anywhere (via the same tap-catcher touch
+// devices use, see below), Escape, or a scroll - rather than following the
+// pointer in and out.
 //
 // On devices with a real pointer (useCanHover), hovering the trigger (or
 // the popover itself, once open - see the mouseenter/mouseleave on both the
@@ -1047,7 +1097,7 @@ function renderCitationEntry (entry: CitationWebpage, key: string | number) {
 // doesn't wire up a tap trigger for this - tapping the entity chip keeps
 // its existing raw-data-inspect behavior instead, since there's no hover
 // state on touch to distinguish "show the link" from "show the debug data".
-function useCitationTooltip (source: CitationSource) {
+function useAnchoredPopover (content: ReactNode, { openOnClick = false, widthClass = 'w-80' } = {}) {
   const [open, setOpen] = useState(false)
   const [tooltipPos, setTooltipPos] = useState({ top: 0, left: 0, flipped: false })
   const canHover = useCanHover()
@@ -1073,6 +1123,15 @@ function useCitationTooltip (source: CitationSource) {
     window.addEventListener('scroll', closeTooltip, true)
     return () => window.removeEventListener('scroll', closeTooltip, true)
   }, [open])
+
+  useEffect(() => {
+    if (!open || !openOnClick) return
+    const onKeyDown = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') closeTooltip()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [open, openOnClick])
 
   const openTooltip = (): void => {
     const wrapper = wrapperRef.current
@@ -1110,12 +1169,7 @@ function useCitationTooltip (source: CitationSource) {
     setOpen(true)
   }
 
-  const entries = (
-    <ul className='flex flex-col gap-1'>
-      {renderCitationEntry(source, 'main')}
-      {source.supportingWebsites?.map((sw, j) => renderCitationEntry(sw, j))}
-    </ul>
-  )
+  const followsPointer = canHover && !openOnClick
 
   // Its own mouseenter/mouseleave let the pointer move from the trigger
   // down into the tooltip - e.g. to click a link in it - without it closing
@@ -1125,25 +1179,59 @@ function useCitationTooltip (source: CitationSource) {
   // rather than pushing the box wider.
   const tooltipPortal = createPortal(
     <>
-      {!canHover && open && (
+      {!followsPointer && open && (
         <span className='fixed inset-0 z-40' onClick={closeTooltip} />
       )}
       <span
         ref={tooltipRef}
         style={{ top: tooltipPos.top, left: tooltipPos.left }}
-        onMouseEnter={canHover ? openTooltip : undefined}
-        onMouseLeave={canHover ? closeTooltip : undefined}
-        className={`fixed ${tooltipPos.flipped ? 'pb-1' : 'pt-1'} ${open ? 'visible opacity-100' : 'invisible opacity-0'} transition-opacity z-50 w-80 max-w-[calc(100vw-1rem)] normal-case font-normal`}
+        onMouseEnter={followsPointer ? openTooltip : undefined}
+        onMouseLeave={followsPointer ? closeTooltip : undefined}
+        className={`fixed ${tooltipPos.flipped ? 'pb-1' : 'pt-1'} ${open ? 'visible opacity-100' : 'invisible opacity-0'} transition-opacity z-50 ${widthClass} max-w-[calc(100vw-1rem)] normal-case font-normal`}
       >
         <span className='block max-h-64 overflow-y-auto bg-white rounded-lg shadow-lg border border-grey4 p-1'>
-          {entries}
+          {content}
         </span>
       </span>
     </>,
     document.body
   )
 
-  return { wrapperRef, canHover, openTooltip, closeTooltip, tooltipPortal }
+  return { wrapperRef, canHover, open, openTooltip, closeTooltip, tooltipPortal }
+}
+
+function useCitationTooltip (source: CitationSource) {
+  return useAnchoredPopover(
+    <ul className='flex flex-col gap-1'>
+      {renderCitationEntry(source, 'main')}
+      {source.supportingWebsites?.map((sw, j) => renderCitationEntry(sw, j))}
+    </ul>
+  )
+}
+
+// The "Hidden" label on a message or content reference ChatGPT doesn't show,
+// set into a gap in its dashed border (a fieldset legend). Clicking the label
+// or its help icon opens a popover explaining what hidden means.
+function HiddenLabel ({ label, explanation }: { label: string, explanation: string }): JSX.Element {
+  const { wrapperRef, open, openTooltip, closeTooltip, tooltipPortal } = useAnchoredPopover(
+    <span className='block p-1.5 text-xs text-black whitespace-normal'>{explanation}</span>,
+    { openOnClick: true, widthClass: 'w-64' }
+  )
+
+  return (
+    <span ref={wrapperRef} className='inline-block'>
+      <button
+        type='button'
+        aria-expanded={open}
+        onClick={open ? closeTooltip : openTooltip}
+        className='flex items-center gap-0.5 text-xs text-warningdark cursor-pointer hover:text-primary'
+      >
+        {label}
+        <img src={HelpSvg} alt='' className='w-3.5 h-3.5' />
+      </button>
+      {tooltipPortal}
+    </span>
+  )
 }
 
 // The link pill itself, plus its hover/tap popover (see useCitationTooltip).
@@ -1217,6 +1305,97 @@ function EntityChip ({ segment, query, onShowRaw, parentLabel }: { segment: Enti
         {segment.name}
       </span>
       {hasLink && tooltipPortal}
+    </span>
+  )
+}
+
+// A "navlist" reference: a horizontally scrolling row of news article cards,
+// like ChatGPT's own news carousel minus the thumbnails. Each card opens its
+// article in a new tab. Touch and trackpad users scroll the row natively;
+// the arrow buttons are for mouse users, so they're left out on touch-only
+// devices (where they'd just cover card text) and only appear while there is
+// more to see in their direction.
+type NavListSegment = Extract<ReferenceSegment, { kind: 'navlist' }>
+
+function NewsCarousel ({ segment, locale, query }: { segment: NavListSegment, locale: string, query: string }): JSX.Element {
+  const rowRef = useRef<HTMLDivElement>(null)
+  const [canScroll, setCanScroll] = useState({ back: false, forward: false })
+  const canHover = useCanHover()
+  const { previousLabel, nextLabel } = getTranslations({
+    previousLabel: { en: 'Previous articles', nl: 'Vorige artikelen' },
+    nextLabel: { en: 'Next articles', nl: 'Volgende artikelen' },
+  }, locale)
+
+  useEffect(() => {
+    const row = rowRef.current
+    if (row == null) return
+    // 1px tolerance: scrollLeft can stop just short of the end on zoomed or
+    // high-DPI screens.
+    const update = (): void => setCanScroll({
+      back: row.scrollLeft > 1,
+      forward: row.scrollLeft + row.clientWidth < row.scrollWidth - 1,
+    })
+    update()
+    row.addEventListener('scroll', update, { passive: true })
+    const observer = new ResizeObserver(update)
+    observer.observe(row)
+    return () => {
+      row.removeEventListener('scroll', update)
+      observer.disconnect()
+    }
+  }, [])
+
+  const scrollRow = (direction: 1 | -1): void => {
+    const row = rowRef.current
+    if (row == null) return
+    row.scrollBy({ left: direction * row.clientWidth * 0.8, behavior: 'smooth' })
+  }
+
+  const arrowButton = 'absolute top-1/2 -translate-y-1/2 z-10 flex items-center justify-center w-8 h-8 rounded-full bg-white border border-grey3 shadow-md cursor-pointer hover:bg-grey5'
+
+  return (
+    <span className='relative block my-1 whitespace-normal'>
+      {/* p-0.5 leaves room for a matched card's ring, which the row's
+          overflow would otherwise clip; the matching scroll-px keeps
+          snapping from scrolling that padding out of view at the start. */}
+      <span ref={rowRef} role='list' aria-label={segment.title} className='flex gap-2 overflow-x-auto snap-x scroll-px-0.5 p-0.5'>
+        {segment.articles.map((article, i) => {
+          const cardClass = `snap-start shrink-0 w-44 flex flex-col gap-1 rounded-lg border border-grey4 bg-grey6 p-2 text-xs ${matchesQuery(article, query) ? matchedRef : ''}`
+          const content = (
+            <>
+              {article.attribution != null && (
+                <span className='flex items-center gap-1 text-grey2 font-semibold min-w-0'>
+                  <img src={LinkSvg} className='w-3 h-3 shrink-0' />
+                  <span className='truncate'>{highlight(article.attribution, query)}</span>
+                </span>
+              )}
+              <span className='text-sm font-semibold text-black line-clamp-3'>{highlight(article.title ?? article.url ?? '', query)}</span>
+              {article.pubDate != null && (
+                <span className='mt-auto text-grey2'>{formatShortDate(article.pubDate, locale)}</span>
+              )}
+            </>
+          )
+          return article.url != null
+            ? (
+              <a key={i} role='listitem' href={article.url} target='_blank' rel='noopener noreferrer' className={`${cardClass} hover:border-primary`}>
+                {content}
+              </a>
+              )
+            : (
+              <span key={i} role='listitem' className={cardClass}>{content}</span>
+              )
+        })}
+      </span>
+      {canHover && canScroll.back && (
+        <button type='button' aria-label={previousLabel} title={previousLabel} onClick={() => scrollRow(-1)} className={`${arrowButton} left-1`}>
+          <img src={BackSvg} className='w-3.5 h-3.5' />
+        </button>
+      )}
+      {canHover && canScroll.forward && (
+        <button type='button' aria-label={nextLabel} title={nextLabel} onClick={() => scrollRow(1)} className={`${arrowButton} right-1`}>
+          <img src={BackSvg} className='w-3.5 h-3.5 rotate-180' />
+        </button>
+      )}
     </span>
   )
 }
@@ -1309,9 +1488,9 @@ function DetailsScreen ({ data, searchQuery = '' }: { data: unknown, searchQuery
 //
 // Markers of type "entity", "url" and "genui" carry their own display data
 // inline (for "genui", a JSON payload - e.g. a chart widget, see
-// resolveGenui). Markers of type "map" are bare/opaque and are resolved
-// against the message's content_references array positionally: the Nth
-// "map" marker corresponds to the Nth "map"-typed content_references entry,
+// resolveGenui). Markers of type "map" and "navlist" (see resolveNavList)
+// are resolved against the message's content_references array
+// positionally: the Nth "map" marker corresponds to the Nth "map"-typed content_references entry,
 // because entries whose type has no marker equivalent (sources_footnote,
 // followup_a) never consume a cursor slot, and a marker whose own slot is
 // "hidden" takes no entry at all (see hiddenMarkerIndices). "video" markers
@@ -1509,6 +1688,8 @@ function resolveMarker (keyword: string, params: string[], marker: string, curso
       return resolveImageGroup(params, cursor)
     case 'genui':
       return resolveGenui(params, cursor)
+    case 'navlist':
+      return resolveNavList(params, cursor)
     default:
       // Any keyword this parser doesn't otherwise recognize (a marker type
       // introduced by a future ChatGPT export version) - best-effort
@@ -1637,6 +1818,23 @@ function resolveMap (marker: string, cursor: ReferenceCursor): ReferenceSegment 
 
   if (places.length === 0) return { kind: 'unknown', keyword: 'map', raw: ref }
   return { kind: 'map', places, raw: ref }
+}
+
+// A "navlist" marker carries a title and a comma-separated list of ref
+// tokens, e.g. (open)navlist(sep)Upcoming hot weather(sep)turn0news16,turn0news17(close).
+// Its "nav_list" entry's items have no `refs` to match those tokens against,
+// so it's resolved by position, like "map".
+function resolveNavList (params: string[], cursor: ReferenceCursor): ReferenceSegment {
+  const ref = cursor.next('nav_list') as ContentReferenceNavList | undefined
+  const articles: NewsArticle[] = (ref?.items ?? []).map(item => ({
+    title: item.title,
+    url: item.url,
+    attribution: item.attribution,
+    pubDate: typeof item.pub_date === 'number' ? new Date(item.pub_date * 1000) : undefined,
+  }))
+
+  if (articles.length === 0) return { kind: 'unknown', keyword: 'navlist', raw: ref ?? { note: 'No matching content reference found', params } }
+  return { kind: 'navlist', title: params[0], articles }
 }
 
 function resolveImageGroup (params: string[], cursor: ReferenceCursor): ReferenceSegment {

@@ -14,6 +14,7 @@ export async function prepareConversationData (
   const sourcesIdx = visualization.sourcesColumn !== undefined ? heads.indexOf(visualization.sourcesColumn) : -1
   const idIdx = visualization.idColumn !== undefined ? heads.indexOf(visualization.idColumn) : -1
   const reactionToIdx = visualization.reactionToColumn !== undefined ? heads.indexOf(visualization.reactionToColumn) : -1
+  const hiddenIdx = visualization.hiddenColumn !== undefined ? heads.indexOf(visualization.hiddenColumn) : -1
 
   const conversationMap = new Map<string, Conversation>()
 
@@ -39,8 +40,9 @@ export async function prepareConversationData (
     const sources = sourcesIdx >= 0 ? parseSources(row.cells[sourcesIdx]) : undefined
     const messageId = idIdx >= 0 ? row.cells[idIdx] : undefined
     const reactionTo = reactionToIdx >= 0 ? row.cells[reactionToIdx] : undefined
+    const hidden = hiddenIdx >= 0 && isTrue(row.cells[hiddenIdx])
 
-    const msg: ConversationMessage = { id: row.id, role, message, model, timestamp, references, sources, messageId, reactionTo, removed }
+    const msg: ConversationMessage = { id: row.id, role, message, model, timestamp, references, sources, messageId, reactionTo, removed, hidden }
 
     if (!conversationMap.has(title)) {
       conversationMap.set(title, { title, rowIds: [], messages: [] })
@@ -88,13 +90,28 @@ function compareByTimestamp (a: ConversationMessage, b: ConversationMessage): nu
   return a.timestamp < b.timestamp ? -1 : a.timestamp > b.timestamp ? 1 : 0
 }
 
+// A hidden-column cell arrives as the DataFrame's own boolean, or as its
+// string form when the table was round-tripped through text.
+function isTrue (cell: unknown): boolean {
+  return cell === true || cell === 'True' || cell === 'true'
+}
+
 // Reconstructs conversation order by following the messageId/reactionTo reply
 // chain, rather than sorting by timestamp. A message whose reactionTo isn't
 // the messageId of another message in this conversation (e.g. it points at
 // the synthetic "client-created-root", or references are absent) is treated
-// as a root. Sibling branches (regenerated replies sharing the same parent)
-// are ordered by timestamp. Any message the traversal can't reach (malformed
-// or cyclic data) is appended at the end so nothing silently disappears.
+// as a root. Any message the traversal can't reach (malformed or cyclic data)
+// is appended at the end so nothing silently disappears.
+//
+// Sibling branches - several replies to the same message, e.g. a regenerated
+// reply, a reply to an edited prompt, or the two replies ChatGPT offers to
+// compare - stay together right under their parent: first the branch the
+// conversation continues on, then each other branch with everything that
+// followed on it, and only then the continuation. A plain depth-first walk
+// would instead put the whole rest of the conversation between two siblings
+// whenever the continuing branch happens to sort first. The continuing
+// branch is the one not marked hidden; without hidden flags (or among hidden
+// branches), the one with the most messages below it.
 function orderByReactionChain (messages: ConversationMessage[]): ConversationMessage[] {
   const byMessageId = new Map<string, ConversationMessage>()
   for (const msg of messages) {
@@ -115,6 +132,7 @@ function orderByReactionChain (messages: ConversationMessage[]): ConversationMes
     }
   }
   roots.sort(compareByTimestamp)
+  for (const siblings of childrenOf.values()) siblings.sort(compareByTimestamp)
 
   // Label sibling branches (e.g. regenerated assistant replies to the same
   // parent turn) with their position, so the message list can show
@@ -122,11 +140,30 @@ function orderByReactionChain (messages: ConversationMessage[]): ConversationMes
   // otherwise looks like a linear sequence of turns.
   for (const siblings of childrenOf.values()) {
     if (siblings.length <= 1) continue
-    siblings.sort(compareByTimestamp)
     siblings.forEach((msg, i) => {
       msg.branchIndex = i + 1
       msg.branchCount = siblings.length
     })
+  }
+
+  const childrenOfMsg = (msg: ConversationMessage): ConversationMessage[] => childrenOf.get(msg.messageId ?? '') ?? []
+
+  const sizes = new Map<ConversationMessage, number>()
+  const subtreeSize = (msg: ConversationMessage): number => {
+    const known = sizes.get(msg)
+    if (known != null) return known
+    // Provisional entry, so a cycle in malformed data can't recurse forever.
+    sizes.set(msg, 1)
+    const size = childrenOfMsg(msg).reduce((sum, child) => sum + subtreeSize(child), 1)
+    sizes.set(msg, size)
+    return size
+  }
+
+  // Ties go to the earliest sibling (the list is sorted by timestamp).
+  const continuingBranch = (siblings: ConversationMessage[]): ConversationMessage => {
+    const shown = siblings.filter(msg => !(msg.hidden ?? false))
+    const candidates = shown.length > 0 ? shown : siblings
+    return candidates.reduce((best, msg) => subtreeSize(msg) > subtreeSize(best) ? msg : best)
   }
 
   const ordered: ConversationMessage[] = []
@@ -136,9 +173,22 @@ function orderByReactionChain (messages: ConversationMessage[]): ConversationMes
     if (visited.has(msg)) return
     visited.add(msg)
     ordered.push(msg)
-    const children = childrenOf.get(msg.messageId ?? '') ?? []
-    children.sort(compareByTimestamp)
-    for (const child of children) visit(child)
+    visitReplies(msg)
+  }
+
+  const visitReplies = (parent: ConversationMessage): void => {
+    const replies = childrenOfMsg(parent)
+    if (replies.length === 0) return
+    const main = continuingBranch(replies)
+    const mainIsNew = !visited.has(main)
+    if (mainIsNew) {
+      visited.add(main)
+      ordered.push(main)
+    }
+    for (const reply of replies) {
+      if (reply !== main) visit(reply)
+    }
+    if (mainIsNew) visitReplies(main)
   }
 
   for (const root of roots) visit(root)

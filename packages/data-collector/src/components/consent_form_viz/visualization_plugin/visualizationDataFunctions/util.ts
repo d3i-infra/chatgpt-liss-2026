@@ -153,6 +153,19 @@ export function rescaleToRange(value: number, min: number, max: number, newMin: 
   return scaled * (newMax - newMin) + newMin;
 }
 
+// One formatter per locale, reused across renders (see ADR-0035), for dates
+// shown as e.g. "12 Sep 2026".
+const shortDateFormatters = new Map<string, Intl.DateTimeFormat>();
+
+export function formatShortDate(date: Date, locale: string): string {
+  let formatter = shortDateFormatters.get(locale);
+  if (formatter == null) {
+    formatter = new Intl.DateTimeFormat(locale, { year: "numeric", month: "short", day: "numeric" });
+    shortDateFormatters.set(locale, formatter);
+  }
+  return formatter.format(date);
+}
+
 export function extractUrlDomain(x: string): string {
   let domain;
   try {

@@ -223,6 +223,9 @@ export const zConversationVisualization = zVisualizationProps.extend({
   sourcesColumn: z.string().optional(),
   idColumn: z.string().optional(),
   reactionToColumn: z.string().optional(),
+  // True/False per message: whether the platform hides it from the
+  // conversation (e.g. a reply on a branch other than the one shown).
+  hiddenColumn: z.string().optional(),
 })
 export type ConversationVisualization = z.infer<typeof zConversationVisualization>
 
@@ -296,6 +299,14 @@ export interface ContentReferenceAltText {
   alt?: string
 }
 
+// Backs "navlist" markers: a row of news article cards. Unlike
+// grouped_webpages, its items carry no `refs`, so it's matched by position.
+// pub_date is a Unix timestamp in seconds.
+export interface ContentReferenceNavList {
+  type: 'nav_list'
+  items?: Array<{ title?: string, url?: string, attribution?: string, pub_date?: number | null }>
+}
+
 export interface ContentReferenceUnknown {
   type: string
   [key: string]: unknown
@@ -309,6 +320,7 @@ export type ContentReference =
   | ContentReferenceDil
   | ContentReferenceUrl
   | ContentReferenceAltText
+  | ContentReferenceNavList
   | ContentReferenceUnknown
 
 // Search result group types, as found in ChatGPT export message metadata
@@ -345,6 +357,9 @@ export interface ConversationMessage {
   // flattening alternates into what looks like a linear sequence of turns.
   branchIndex?: number
   branchCount?: number
+  // True when the platform doesn't show this message in the conversation
+  // (see hiddenColumn). Still rendered, but marked as hidden.
+  hidden?: boolean
   // True when this message's row has been deleted from the donated table but
   // is still shown as a removed-placeholder so it can be restored (see
   // prepareConversationData / the tombstone rendering in chat_conversation).
