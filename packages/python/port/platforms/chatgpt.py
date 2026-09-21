@@ -108,7 +108,7 @@ def conversations_to_df(reader: ZipArchiveReader, errors: Counter) -> pd.DataFra
     Returns
     -------
     pd.DataFrame
-        Columns: ``conversation title``, ``role``, ``message``, ``model``, ``time``, ``message id``, ``reaction to``, ``hidden``, ``content references``, ``search_result_groups``.
+        Columns: ``conversation title``, ``role``, ``message``, ``content type``, ``model``, ``time``, ``message id``, ``reaction to``, ``hidden``, ``content references``, ``search_result_groups``.
         Empty DataFrame when the file is absent or parsing fails.
 
     Table documentation::
@@ -120,6 +120,7 @@ def conversations_to_df(reader: ZipArchiveReader, errors: Counter) -> pd.DataFra
             "conversation title": "Title of the conversation as stored in the export.",
             "role": "Role of the message author: 'user' or 'assistant'.",
             "message": "Full text of the message.",
+            "content type": "The content type of the message, e.g. 'text', 'multimodal_text', 'thoughts', or 'reasoning_recap'.",
             "model": "ChatGPT model slug used to generate the assistant reply.",
             "time": "ISO 8601 timestamp of when the message was created.",
             "message id": "A unique identifier for the message.",
@@ -147,6 +148,7 @@ def conversations_to_df(reader: ZipArchiveReader, errors: Counter) -> pd.DataFra
             "conversation title": {"en": "Conversation title", "nl": "Gesprektitel"},
             "role": {"en": "Role", "nl": "Rol"},
             "message": {"en": "Message", "nl": "Bericht"},
+            "content type": {"en": "Content type", "nl": "Inhoudstype"},
             "model": {"en": "Model", "nl": "Model"},
             "time": {"en": "Time", "nl": "Tijd"},
             "message id": {"en": "ID", "nl": "ID"},
@@ -172,6 +174,7 @@ def conversations_to_df(reader: ZipArchiveReader, errors: Counter) -> pd.DataFra
               "idColumn": "message id",
               "reactionToColumn": "reaction to",
               "hiddenColumn": "hidden",
+              "contentTypeColumn": "content type",
               "height": 500
             },
             {
@@ -222,17 +225,27 @@ def conversations_to_df(reader: ZipArchiveReader, errors: Counter) -> pd.DataFra
                         search_result_groups = turn['message']['metadata'].get('search_result_groups', [])
 
                     message = ""
+                    content_type = ""
                     if isinstance(turn['message'].get('content'), dict):
                         content_type = turn['message']['content'].get('content_type', '')
                         if content_type == 'text':
                             message = turn['message']['content'].get('parts', '')
+                        elif content_type == 'multimodal_text':
+                            # parts mixes plain strings with dicts (image/audio
+                            # asset pointers, audio transcriptions); keep the text.
+                            parts = turn['message']['content'].get('parts', [])
+                            message = [
+                                part if isinstance(part, str) else part.get('text')
+                                for part in parts
+                                if isinstance(part, (str, dict))
+                            ]
                         elif content_type == 'thoughts':
                             message = turn['message']['content'].get('thoughts', {})
                             message = [thought.get('summary') for thought in message if 'summary' in thought]
                         elif content_type == 'reasoning_recap':
                             message = turn['message']['content'].get('content', '')
                         else:
-                            continue #skip this turn if the content type is not recognized
+                            message = "[Unhandled content type: " + str(content_type) + ']'
                         if isinstance(message, list):
                             message = " ".join(part for part in message if isinstance(part, str))
 
@@ -247,6 +260,7 @@ def conversations_to_df(reader: ZipArchiveReader, errors: Counter) -> pd.DataFra
                             "conversation title": title,
                             "role": role,
                             "message": redact.redact(message),
+                            "content type": content_type,
                             "model": model,
                             "time": time,
                             "message id": id,

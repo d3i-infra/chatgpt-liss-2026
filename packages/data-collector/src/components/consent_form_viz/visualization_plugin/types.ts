@@ -226,6 +226,10 @@ export const zConversationVisualization = zVisualizationProps.extend({
   // True/False per message: whether the platform hides it from the
   // conversation (e.g. a reply on a branch other than the one shown).
   hiddenColumn: z.string().optional(),
+  // Per message: the platform's content type (e.g. ChatGPT's 'text',
+  // 'multimodal_text', 'thoughts', 'reasoning_recap'). Messages of a type
+  // other than plain text are marked with a labelled border.
+  contentTypeColumn: z.string().optional(),
 })
 export type ConversationVisualization = z.infer<typeof zConversationVisualization>
 
@@ -360,6 +364,8 @@ export interface ConversationMessage {
   // True when the platform doesn't show this message in the conversation
   // (see hiddenColumn). Still rendered, but marked as hidden.
   hidden?: boolean
+  // The platform's content type (see contentTypeColumn), if configured.
+  contentType?: string
   // True when this message's row has been deleted from the donated table but
   // is still shown as a removed-placeholder so it can be restored (see
   // prepareConversationData / the tombstone rendering in chat_conversation).

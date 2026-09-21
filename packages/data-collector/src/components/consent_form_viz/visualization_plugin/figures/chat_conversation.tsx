@@ -57,6 +57,20 @@ const removeIcon = 'w-4 h-4 group-hover:brightness-0 group-hover:invert'
 const restoreIcon = 'w-4 h-4'
 const backIcon = 'w-4 h-4 group-hover:brightness-0 group-hover:invert'
 const inspectIcon = 'w-4 h-4 group-hover:brightness-0 group-hover:invert'
+
+// Content types (see contentTypeColumn) that get a labelled border instead of
+// the plain role bubble: the assistant's thinking in a dotted white box,
+// messages with more than text (e.g. an uploaded image) in a green one. Plain
+// text and unlisted types render as a normal bubble.
+type LabelledContentType = 'thoughts' | 'reasoning_recap' | 'multimodal_text'
+const contentTypeBox: Record<LabelledContentType, { box: string, label: string }> = {
+  thoughts: { box: 'border-2 border-dotted border-grey2 bg-white', label: 'text-grey1' },
+  reasoning_recap: { box: 'border-2 border-dotted border-grey2 bg-white', label: 'text-grey1' },
+  multimodal_text: { box: 'border-2 border-success bg-white', label: 'text-[#3F8A1C]' },
+}
+function isLabelledContentType (contentType: string | undefined): contentType is LabelledContentType {
+  return contentType != null && Object.prototype.hasOwnProperty.call(contentTypeBox, contentType)
+}
 //  max-[500px]:hidden'
 
 function highlight (text: string, query: string) {
@@ -239,7 +253,7 @@ export default function ChatConversation ({ visualizationData, locale, search, h
     setScreenStack([{ kind: 'messages' }])
   }, [visualizationData])
 
-  const { selectMsg, noDataMsg, deletedMsg, sourcesMsg, detailsMsg, referenceDataMsg, sourceDataMsg, messageLabel, backMsg, removeMsg, restoreMsg, removedPlaceholderMsg, youMsg, assistantMsg, hiddenMsgLabel, hiddenMsgTitle } = getTranslations({
+  const { selectMsg, noDataMsg, deletedMsg, sourcesMsg, detailsMsg, referenceDataMsg, sourceDataMsg, messageLabel, backMsg, removeMsg, restoreMsg, removedPlaceholderMsg, youMsg, assistantMsg, hiddenMsgLabel, hiddenMsgTitle, thoughtsLabel, thoughtsTitle, reasoningRecapLabel, reasoningRecapTitle, multimodalLabel, multimodalTitle } = getTranslations({
     selectMsg: { en: 'Select a conversation', nl: 'Selecteer een gesprek' },
     noDataMsg: { en: 'No messages', nl: 'Geen berichten' },
     deletedMsg: { en: 'Delete', nl: 'Verwijder' },
@@ -259,7 +273,28 @@ export default function ChatConversation ({ visualizationData, locale, search, h
       en: 'This message is present in your chat data, but ChatGPT did not show it during the original conversation.',
       nl: 'Dit bericht is aanwezig in je chatgegevens, maar ChatGPT heeft het niet aan je getoond tijdens het oorspronkelijke gesprek.',
     },
+    thoughtsLabel: { en: 'Thoughts', nl: 'Gedachten' },
+    thoughtsTitle: {
+      en: 'A summary of what the assistant was thinking while working on its reply. ChatGPT shows this in a collapsible "Thinking" section, not as a regular message.',
+      nl: 'Een samenvatting van wat de assistent dacht terwijl het aan zijn antwoord werkte. ChatGPT toont dit in een inklapbaar "Denken"-gedeelte, niet als gewoon bericht.',
+    },
+    reasoningRecapLabel: { en: 'Reasoning recap', nl: 'Samenvatting redenering' },
+    reasoningRecapTitle: {
+      en: 'A short recap of the assistant\'s reasoning, such as how long it thought before replying. ChatGPT shows this above the reply, not as a regular message.',
+      nl: 'Een korte samenvatting van de redenering van de assistent, zoals hoe lang het nadacht voor het antwoordde. ChatGPT toont dit boven het antwoord, niet als gewoon bericht.',
+    },
+    multimodalLabel: { en: 'Multimodal', nl: 'Multimodaal' },
+    multimodalTitle: {
+      en: 'This message contained more than text, such as an image, file or voice recording. Only its text is included in your data.',
+      nl: 'Dit bericht bevatte meer dan tekst, zoals een afbeelding, bestand of spraakopname. Alleen de tekst ervan zit in je gegevens.',
+    },
   }, locale)
+
+  const contentTypeLabels: Record<LabelledContentType, { label: string, explanation: string }> = {
+    thoughts: { label: thoughtsLabel, explanation: thoughtsTitle },
+    reasoning_recap: { label: reasoningRecapLabel, explanation: reasoningRecapTitle },
+    multimodal_text: { label: multimodalLabel, explanation: multimodalTitle },
+  }
 
   function deleteConversation (conv: Conversation): void {
     handleDelete(conv.rowIds)
@@ -402,9 +437,13 @@ export default function ChatConversation ({ visualizationData, locale, search, h
               // On a branch ChatGPT doesn't show (see prepareConversationData):
               // still rendered in full, but visibly marked as hidden.
               const isHidden = !isRemoved && (msg.hidden ?? false)
-              // A hidden message's "Hidden" label sits in a gap in its dashed
-              // border, which a fieldset's legend gives natively.
-              const Bubble = isHidden ? 'fieldset' : 'div'
+              // Thoughts, a reasoning recap or a multimodal message: rendered
+              // in a box of its own, labelled with its content type.
+              const contentType = !isRemoved && isLabelledContentType(msg.contentType) ? msg.contentType : undefined
+              // A hidden or content-type label sits in a gap in the border,
+              // which a fieldset's legend gives natively. When a message is
+              // both, the hidden look wins and the legend carries both labels.
+              const Bubble = isHidden || contentType != null ? 'fieldset' : 'div'
               const messageSources = msg.sources?.flatMap(group => group.entries ?? group.items ?? []) ?? []
               const sourcesMatched = matchesQuery(msg.sources, query)
               const detailsMatched = matchesQuery(msg.references, query)
@@ -423,14 +462,19 @@ export default function ChatConversation ({ visualizationData, locale, search, h
                           // its content, so a wide table or news row would
                           // stretch it instead of scrolling.
                           ? `min-w-0 pb-2 border border-dashed border-warning bg-warninglight text-black ${isUser ? 'rounded-br-sm' : 'rounded-bl-sm'}`
+                          : contentType != null
+                          ? `min-w-0 pb-2 ${contentTypeBox[contentType].box} text-black ${isUser ? 'rounded-br-sm' : 'rounded-bl-sm'}`
                           : isUser
                           ? 'py-2 bg-primary text-white rounded-br-sm'
                           : 'py-2 bg-grey4 text-black rounded-bl-sm'
                     }`}
                   >
-                    {isHidden && (
-                      <legend className='ml-1 mb-1 px-1'>
-                        <HiddenLabel label={hiddenMsgLabel} explanation={hiddenMsgTitle} />
+                    {(isHidden || contentType != null) && (
+                      <legend className='ml-1 mb-1 px-1 flex items-center gap-2'>
+                        {isHidden && <BorderLabel label={hiddenMsgLabel} explanation={hiddenMsgTitle} />}
+                        {contentType != null && (
+                          <BorderLabel {...contentTypeLabels[contentType]} colorClass={contentTypeBox[contentType].label} />
+                        )}
                       </legend>
                     )}
                     {isRemoved
@@ -896,7 +940,7 @@ function renderReference (segment: ReferenceSegment, labels: Labels, query: stri
         // min-w-0: a fieldset otherwise can't shrink below its content.
         <fieldset className={`${layout} min-w-0 pb-0.5 rounded border border-dashed border-warning bg-warninglight`}>
           <legend className='ml-0.5 px-0.5'>
-            <HiddenLabel label={hiddenLabel} explanation={hiddenTitle} />
+            <BorderLabel label={hiddenLabel} explanation={hiddenTitle} />
           </legend>
           {renderReference(segment.segment, labels, query, onShowRaw)}
         </fieldset>
@@ -1051,7 +1095,7 @@ function renderCitationEntry (entry: CitationWebpage, key: string | number) {
 // separate pill needed - matching how ChatGPT's own UI surfaces an entity's
 // link; see resolveCitation's module comment for why entity self-citations
 // don't get their own citation marker), and for the explanation behind a
-// "Hidden" label (see HiddenLabel). Extracted so the interaction
+// "Hidden" label (see BorderLabel). Extracted so the interaction
 // (positioning, hover-vs-tap behavior) is only implemented once; callers
 // wire wrapperRef/openTooltip/closeTooltip onto whatever their own trigger
 // element is.
@@ -1209,10 +1253,11 @@ function useCitationTooltip (source: CitationSource) {
   )
 }
 
-// The "Hidden" label on a message or content reference ChatGPT doesn't show,
-// set into a gap in its dashed border (a fieldset legend). Clicking the label
-// or its help icon opens a popover explaining what hidden means.
-function HiddenLabel ({ label, explanation }: { label: string, explanation: string }): JSX.Element {
+// A label set into a gap in a box's border (a fieldset legend): "Hidden" on a
+// message or content reference ChatGPT doesn't show, or the content type of a
+// message that isn't plain text. Clicking the label or its help icon opens a
+// popover with the explanation.
+function BorderLabel ({ label, explanation, colorClass = 'text-warningdark' }: { label: string, explanation: string, colorClass?: string }): JSX.Element {
   const { wrapperRef, open, openTooltip, closeTooltip, tooltipPortal } = useAnchoredPopover(
     <span className='block p-1.5 text-xs text-black whitespace-normal'>{explanation}</span>,
     { openOnClick: true, widthClass: 'w-64' }
@@ -1224,7 +1269,7 @@ function HiddenLabel ({ label, explanation }: { label: string, explanation: stri
         type='button'
         aria-expanded={open}
         onClick={open ? closeTooltip : openTooltip}
-        className='flex items-center gap-0.5 text-xs text-warningdark cursor-pointer hover:text-primary'
+        className={`flex items-center gap-0.5 text-xs ${colorClass} cursor-pointer hover:text-primary`}
       >
         {label}
         <img src={HelpSvg} alt='' className='w-3.5 h-3.5' />

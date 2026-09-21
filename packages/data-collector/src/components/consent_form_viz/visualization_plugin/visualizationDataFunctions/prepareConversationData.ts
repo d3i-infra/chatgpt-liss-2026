@@ -15,6 +15,7 @@ export async function prepareConversationData (
   const idIdx = visualization.idColumn !== undefined ? heads.indexOf(visualization.idColumn) : -1
   const reactionToIdx = visualization.reactionToColumn !== undefined ? heads.indexOf(visualization.reactionToColumn) : -1
   const hiddenIdx = visualization.hiddenColumn !== undefined ? heads.indexOf(visualization.hiddenColumn) : -1
+  const contentTypeIdx = visualization.contentTypeColumn !== undefined ? heads.indexOf(visualization.contentTypeColumn) : -1
 
   const conversationMap = new Map<string, Conversation>()
 
@@ -41,8 +42,9 @@ export async function prepareConversationData (
     const messageId = idIdx >= 0 ? row.cells[idIdx] : undefined
     const reactionTo = reactionToIdx >= 0 ? row.cells[reactionToIdx] : undefined
     const hidden = hiddenIdx >= 0 && isTrue(row.cells[hiddenIdx])
+    const contentType = contentTypeIdx >= 0 ? row.cells[contentTypeIdx] : undefined
 
-    const msg: ConversationMessage = { id: row.id, role, message, model, timestamp, references, sources, messageId, reactionTo, removed, hidden }
+    const msg: ConversationMessage = { id: row.id, role, message, model, timestamp, references, sources, messageId, reactionTo, removed, hidden, contentType }
 
     if (!conversationMap.has(title)) {
       conversationMap.set(title, { title, rowIds: [], messages: [] })

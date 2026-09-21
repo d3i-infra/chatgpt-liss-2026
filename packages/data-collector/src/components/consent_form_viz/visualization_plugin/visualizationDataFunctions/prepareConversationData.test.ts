@@ -74,3 +74,26 @@ describe('prepareConversationData sibling branches', () => {
     expect(await order(makeTable(branched), withoutHidden)).toEqual(['q1', 'a1', 'b1', 'q2', 'a2'])
   })
 })
+
+describe('prepareConversationData content type', () => {
+  const table: Table = {
+    id: 'chatgpt_conversations',
+    head: { cells: ['conversation title', 'role', 'message', 'content type'] },
+    body: {
+      rows: [
+        { id: 'q1', cells: ['Chat', 'user', 'look at this', 'multimodal_text'] },
+        { id: 't1', cells: ['Chat', 'assistant', 'considering the image', 'thoughts'] }
+      ]
+    }
+  }
+
+  it('carries each message its content type', async () => {
+    const data = await prepareConversationData(table, { ...visualization, contentTypeColumn: 'content type' })
+    expect(data.conversations[0].messages.map((m) => m.contentType)).toEqual(['multimodal_text', 'thoughts'])
+  })
+
+  it('leaves it unset without a content type column', async () => {
+    const data = await prepareConversationData(table, visualization)
+    expect(data.conversations[0].messages.every((m) => m.contentType === undefined)).toBe(true)
+  })
+})

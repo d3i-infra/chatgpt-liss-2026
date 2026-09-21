@@ -74,7 +74,8 @@ function visualizationColumns (visualization: VisualizationType): string[] | typ
       conversation.sourcesColumn,
       conversation.idColumn,
       conversation.reactionToColumn,
-      conversation.hiddenColumn
+      conversation.hiddenColumn,
+      conversation.contentTypeColumn
     ]) {
       if (column !== undefined) columns.add(column)
     }
