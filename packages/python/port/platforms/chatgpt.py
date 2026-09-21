@@ -26,7 +26,6 @@ Platform info::
         "time_last_tested": "not yet implemented"
     }
 """
-import json
 import logging
 from collections import Counter
 from typing import Callable
@@ -213,42 +212,51 @@ def conversations_to_df(reader: ZipArchiveReader, errors: Counter) -> pd.DataFra
             shown_ids = shown_message_ids(conversation)
             for id, turn in conversation["mapping"].items():
 
-                content_references = []
                 if isinstance(turn.get('message'), dict):
+                    content_references = []
                     if isinstance(turn['message'].get('metadata'), dict):
                         content_references = turn['message']['metadata'].get('content_references', [])
                 
-                search_result_groups = []
-                if isinstance(turn.get('message'), dict):
+                    search_result_groups = []
                     if isinstance(turn['message'].get('metadata'), dict):
                         search_result_groups = turn['message']['metadata'].get('search_result_groups', [])
 
-                denested_d = eh.dict_denester(turn)
-                message = eh.find_item(denested_d, "part")
-                if isinstance(message, list):
-                    message = " ".join(part for part in message if isinstance(part, str))
+                    message = ""
+                    if isinstance(turn['message'].get('content'), dict):
+                        content_type = turn['message']['content'].get('content_type', '')
+                        if content_type == 'text':
+                            message = turn['message']['content'].get('parts', '')
+                        elif content_type == 'thoughts':
+                            message = turn['message']['content'].get('thoughts', {})
+                            message = [thought.get('summary') for thought in message if 'summary' in thought]
+                        elif content_type == 'reasoning_recap':
+                            message = turn['message']['content'].get('content', '')
+                        else:
+                            continue #skip this turn if the content type is not recognized
+                        if isinstance(message, list):
+                            message = " ".join(part for part in message if isinstance(part, str))
 
-                is_hidden = eh.find_item(denested_d, "is_visually_hidden_from_conversation")
-                if is_hidden != "True":
-                    role = eh.find_item(denested_d, "role")
-                    message = message
-                    model = eh.find_item(denested_d, "-model_slug")
-                    reaction_to = eh.find_item(denested_d, "parent")
-                    time = eh.epoch_to_iso(eh.find_item(denested_d, "create_time"), errors=errors)
-                    datapoint = {
-                        "conversation title": title,
-                        "role": role,
-                        "message": redact.redact(message),
-                        "model": model,
-                        "time": time,
-                        "message id": id,
-                        "reaction to": reaction_to,
-                        "hidden": shown_ids is not None and id not in shown_ids,
-                        "content references": redact.redact(json.dumps(content_references)),
-                        "search_result_groups": redact.redact(json.dumps(search_result_groups)),
-                    }
-                    if role != "":
-                        datapoints.append(datapoint)
+                    denested_d = eh.dict_denester(turn)
+                    is_hidden = eh.find_item(denested_d, "is_visually_hidden_from_conversation")
+                    if is_hidden != "True":
+                        role = eh.find_item(denested_d, "role")
+                        model = eh.find_item(denested_d, "-model_slug")
+                        reaction_to = eh.find_item(denested_d, "parent")
+                        time = eh.epoch_to_iso(eh.find_item(denested_d, "create_time"), errors=errors)
+                        datapoint = {
+                            "conversation title": title,
+                            "role": role,
+                            "message": redact.redact(message),
+                            "model": model,
+                            "time": time,
+                            "message id": id,
+                            "reaction to": reaction_to,
+                            "hidden": shown_ids is not None and id not in shown_ids,
+                            "content references": redact.redact_json(content_references),
+                            "search_result_groups": redact.redact_json(search_result_groups),
+                        }
+                        if role != "":
+                            datapoints.append(datapoint)
 
         out = pd.DataFrame(datapoints)
 

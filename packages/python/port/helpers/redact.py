@@ -5,7 +5,9 @@ All three patterns are applied in a single pass over the string, making this
 efficient even for large inputs.
 """
 
+import json
 import re
+from typing import Any
 
 REDACT_EMAIL = "[EMAIL]"
 REDACT_PHONE = "[PHONE]"
@@ -77,6 +79,28 @@ def _replace(m: re.Match) -> str:  # type: ignore[type-arg]
 def redact(text: str) -> str:
     """Redact emails, Dutch postal codes, and phone numbers from *text* in one pass."""
     return _COMBINED_RE.sub(_replace, text)
+
+
+def redact_json(value: Any) -> str:
+    """Redact every string inside *value*, then serialize it to JSON.
+
+    Redacting the serialized string instead would also match inside JSON
+    escape sequences: ``json.dumps`` writes e.g. an en dash as ``\\u2013``, so
+    "human–AI" becomes ``human\\u2013AI``, whose ``2013AI`` looks like a
+    Dutch postal code; replacing it leaves an invalid ``\\u`` escape and the
+    whole value no longer parses.
+    """
+    return json.dumps(_redact_strings(value))
+
+
+def _redact_strings(value: Any) -> Any:
+    if isinstance(value, str):
+        return redact(value)
+    if isinstance(value, dict):
+        return {key: _redact_strings(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_redact_strings(item) for item in value]
+    return value
 
 
 # ---------------------------------------------------------------------------

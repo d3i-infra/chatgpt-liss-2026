@@ -1,3 +1,5 @@
+import json
+
 import pytest
 from port.helpers.redact import (
     REDACT_EMAIL,
@@ -6,6 +8,7 @@ from port.helpers.redact import (
     redact,
     redact_dutch_postal_code,
     redact_email,
+    redact_json,
     redact_phone,
 )
 
@@ -193,3 +196,21 @@ class TestRedact:
 
     def test_empty_string(self):
         assert redact("") == ""
+
+
+# ---------------------------------------------------------------------------
+# Structured values
+# ---------------------------------------------------------------------------
+
+class TestRedactJson:
+    def test_escaped_non_ascii_stays_valid_json(self):
+        # json.dumps escapes the en dash as –; "2013AI" must not be
+        # redacted as a postal code, breaking the escape.
+        value = [{"title": "How human–AI feedback loops alter judgements"}]
+        assert json.loads(redact_json(value)) == value
+
+    def test_redacts_nested_strings(self):
+        value = {"items": [{"snippet": "mail jan@example.nl", "pub_date": 1669852800.0}]}
+        assert json.loads(redact_json(value)) == {
+            "items": [{"snippet": f"mail {REDACT_EMAIL}", "pub_date": 1669852800.0}]
+        }
