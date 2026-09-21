@@ -311,6 +311,35 @@ export interface ContentReferenceNavList {
   items?: Array<{ title?: string, url?: string, attribution?: string, pub_date?: number | null }>
 }
 
+// Backs "products" markers: a row of shopping product cards. `cite` is the
+// product's ref token (e.g. "turn0product10"), which the marker's own
+// selections name. The export has no product link (`url` is empty) and its
+// images are hosted by OpenAI, so neither is used.
+export interface ProductItem {
+  cite?: string
+  title?: string
+  price?: string | null
+  merchants?: string | null
+  description?: string | null
+  rating?: number | null
+  num_reviews?: number | null
+  url?: string | null
+}
+
+export interface ContentReferenceProducts {
+  type: 'products'
+  products?: ProductItem[]
+}
+
+// Backs an "entity" marker naming a product by its ref token, e.g.
+// ["turn0product10","Ferrari drain fitting ..."], rather than a regular
+// "entity" entry.
+export interface ContentReferenceProductEntity {
+  type: 'product_entity'
+  alt?: string
+  prompt_text?: string
+}
+
 export interface ContentReferenceUnknown {
   type: string
   [key: string]: unknown
@@ -325,6 +354,8 @@ export type ContentReference =
   | ContentReferenceUrl
   | ContentReferenceAltText
   | ContentReferenceNavList
+  | ContentReferenceProducts
+  | ContentReferenceProductEntity
   | ContentReferenceUnknown
 
 // Search result group types, as found in ChatGPT export message metadata

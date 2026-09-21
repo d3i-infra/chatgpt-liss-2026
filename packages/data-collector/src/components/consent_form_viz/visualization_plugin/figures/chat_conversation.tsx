@@ -14,6 +14,9 @@ import {
   ContentReferenceUrl,
   ContentReferenceAltText,
   ContentReferenceNavList,
+  ContentReferenceProducts,
+  ContentReferenceProductEntity,
+  ProductItem,
   Translatable,
 } from '../types'
 import { formatShortDate } from '../visualizationDataFunctions/util'
@@ -29,6 +32,7 @@ import ImagesSvg from '../../assets/images/images.svg'
 import WidgetSvg from '../../assets/images/widget.svg'
 import LinkSvg from '../../assets/images/link.svg'
 import EntitySvg from '../../assets/images/entity.svg'
+import ProductSvg from '../../assets/images/product.svg'
 import InspectSvg from '../../assets/images/gear.svg'
 import HelpSvg from '../../assets/images/help.svg'
 
@@ -715,13 +719,15 @@ interface NewsArticle {
 }
 
 type ReferenceSegment =
-  | { kind: 'entity', name: string, disambiguation?: string, url?: string, raw: unknown }
+  // `product` marks an entity naming a shopping product (see resolveEntity).
+  | { kind: 'entity', name: string, disambiguation?: string, url?: string, product?: boolean, raw: unknown }
   | { kind: 'url', text: string, href?: string }
   | { kind: 'video', text: string, href?: string }
   | { kind: 'citation', sources: CitationSource[] }
   | { kind: 'map', places: MapPlace[], raw: unknown }
   // The marker's title isn't shown by ChatGPT; kept as the row's accessible name.
   | { kind: 'navlist', title?: string, articles: NewsArticle[] }
+  | { kind: 'products', products: ProductItem[] }
   | { kind: 'images', count: number, raw: unknown }
   | { kind: 'widget', name: string, raw: unknown }
   // A marker ChatGPT itself doesn't show (its content_references slot is
@@ -757,10 +763,11 @@ interface Labels {
   mapLabel: string
   unknownLabel: string
   entityLabel: string
+  productLabel: string
   hiddenLabel: string
   hiddenTitle: string
   // Not a label, but carried along with them for references that format
-  // dates themselves (navlist).
+  // dates themselves (navlist) and for carousel button labels.
   locale: string
 }
 
@@ -781,6 +788,7 @@ function MessageContent ({ message, references, locale, searchQuery = '', onShow
     mapLabel: { en: 'Map', nl: 'Kaart' },
     unknownLabel: { en: 'Unknown', nl: 'Onbekend' },
     entityLabel: { en: 'Entity', nl: 'Entiteit' },
+    productLabel: { en: 'Product', nl: 'Product' },
     hiddenLabel: { en: 'Hidden', nl: 'Verborgen' },
     hiddenTitle: {
       en: 'This item is present in your chat data, but ChatGPT did not show it to you in the original conversation.',
@@ -919,18 +927,18 @@ function renderInline (child: LiteInlineChild<ReferenceSegment>, labels: Labels,
 }
 
 function renderReference (segment: ReferenceSegment, labels: Labels, query: string, onShowRaw: (data: unknown, parentLabel: string) => void) {
-  const { imagesLabel, widgetLabel, mapLabel, unknownLabel, entityLabel, hiddenLabel, hiddenTitle } = labels
+  const { imagesLabel, widgetLabel, mapLabel, unknownLabel, entityLabel, productLabel, hiddenLabel, hiddenTitle } = labels
   switch (segment.kind) {
     case 'hidden': {
       // Same look as a hidden message: a dashed box with the "Hidden" label
       // in a gap at the top left of its border, which a fieldset's legend
-      // gives natively. A map or navlist is a full-width block. Everything
+      // gives natively. A map, navlist or products row is a full-width block. Everything
       // else stays within the line of text as an inline-block: a fieldset
       // can't break across lines,
       // so a long hidden link wraps inside its own box instead. Text-like
       // references sit on the text's baseline; chips are centred on the line.
       const inner = segment.segment.kind
-      const isBlock = inner === 'map' || inner === 'navlist'
+      const isBlock = inner === 'map' || inner === 'navlist' || inner === 'products'
       const layout = isBlock
         ? 'block my-1 px-1'
         : inner === 'url' || inner === 'video' || inner === 'citation' || inner === 'entity'
@@ -948,7 +956,7 @@ function renderReference (segment: ReferenceSegment, labels: Labels, query: stri
     }
 
     case 'entity':
-      return <EntityChip segment={segment} query={query} onShowRaw={onShowRaw} parentLabel={`${entityLabel}: ${segment.name}`} />
+      return <EntityChip segment={segment} query={query} onShowRaw={onShowRaw} parentLabel={`${segment.product === true ? productLabel : entityLabel}: ${segment.name}`} />
 
     case 'url':
       return segment.href != null
@@ -1013,6 +1021,9 @@ function renderReference (segment: ReferenceSegment, labels: Labels, query: stri
 
     case 'navlist':
       return <NewsCarousel segment={segment} locale={labels.locale} query={query} />
+
+    case 'products':
+      return <ProductCarousel segment={segment} locale={labels.locale} query={query} productLabel={productLabel} onShowRaw={onShowRaw} />
 
     case 'images':
       return (
@@ -1346,7 +1357,7 @@ function EntityChip ({ segment, query, onShowRaw, parentLabel }: { segment: Enti
         onMouseLeave={hasLink && canHover ? closeTooltip : undefined}
         className={`font-semibold bg-grey5 rounded inline-flex items-center px-1 ${clickableRef} ${matched ? matchedRef : ''}`}
       >
-        <img src={EntitySvg} className='w-3 h-3 mr-0.5 group-hover:brightness-0 group-hover:invert' />
+        <img src={segment.product === true ? ProductSvg : EntitySvg} className='w-3 h-3 mr-0.5 group-hover:brightness-0 group-hover:invert' />
         {segment.name}
       </span>
       {hasLink && tooltipPortal}
@@ -1354,22 +1365,18 @@ function EntityChip ({ segment, query, onShowRaw, parentLabel }: { segment: Enti
   )
 }
 
-// A "navlist" reference: a horizontally scrolling row of news article cards,
-// like ChatGPT's own news carousel minus the thumbnails. Each card opens its
-// article in a new tab. Touch and trackpad users scroll the row natively;
-// the arrow buttons are for mouse users, so they're left out on touch-only
-// devices (where they'd just cover card text) and only appear while there is
-// more to see in their direction.
-type NavListSegment = Extract<ReferenceSegment, { kind: 'navlist' }>
+// A horizontally scrolling row of cards, shared by "navlist" (news articles)
+// and "products" references. Touch and trackpad users scroll the row
+// natively; the arrow buttons are for mouse users, so they're left out on
+// touch-only devices (where they'd just cover card text) and only appear
+// while there is more to see in their direction. Children are the cards,
+// each with role='listitem' and the carouselCard class.
+const carouselCard = 'snap-start shrink-0 w-44 flex flex-col gap-1 rounded-lg border border-grey4 bg-grey6 p-2 text-xs'
 
-function NewsCarousel ({ segment, locale, query }: { segment: NavListSegment, locale: string, query: string }): JSX.Element {
+function CardCarousel ({ label, previousLabel, nextLabel, children }: { label?: string, previousLabel: string, nextLabel: string, children: ReactNode }): JSX.Element {
   const rowRef = useRef<HTMLDivElement>(null)
   const [canScroll, setCanScroll] = useState({ back: false, forward: false })
   const canHover = useCanHover()
-  const { previousLabel, nextLabel } = getTranslations({
-    previousLabel: { en: 'Previous articles', nl: 'Vorige artikelen' },
-    nextLabel: { en: 'Next articles', nl: 'Volgende artikelen' },
-  }, locale)
 
   useEffect(() => {
     const row = rowRef.current
@@ -1403,33 +1410,8 @@ function NewsCarousel ({ segment, locale, query }: { segment: NavListSegment, lo
       {/* p-0.5 leaves room for a matched card's ring, which the row's
           overflow would otherwise clip; the matching scroll-px keeps
           snapping from scrolling that padding out of view at the start. */}
-      <span ref={rowRef} role='list' aria-label={segment.title} className='flex gap-2 overflow-x-auto snap-x scroll-px-0.5 p-0.5'>
-        {segment.articles.map((article, i) => {
-          const cardClass = `snap-start shrink-0 w-44 flex flex-col gap-1 rounded-lg border border-grey4 bg-grey6 p-2 text-xs ${matchesQuery(article, query) ? matchedRef : ''}`
-          const content = (
-            <>
-              {article.attribution != null && (
-                <span className='flex items-center gap-1 text-grey2 font-semibold min-w-0'>
-                  <img src={LinkSvg} className='w-3 h-3 shrink-0' />
-                  <span className='truncate'>{highlight(article.attribution, query)}</span>
-                </span>
-              )}
-              <span className='text-sm font-semibold text-black line-clamp-3'>{highlight(article.title ?? article.url ?? '', query)}</span>
-              {article.pubDate != null && (
-                <span className='mt-auto text-grey2'>{formatShortDate(article.pubDate, locale)}</span>
-              )}
-            </>
-          )
-          return article.url != null
-            ? (
-              <a key={i} role='listitem' href={article.url} target='_blank' rel='noopener noreferrer' className={`${cardClass} hover:border-primary`}>
-                {content}
-              </a>
-              )
-            : (
-              <span key={i} role='listitem' className={cardClass}>{content}</span>
-              )
-        })}
+      <span ref={rowRef} role='list' aria-label={label} className='flex gap-2 overflow-x-auto snap-x scroll-px-0.5 p-0.5'>
+        {children}
       </span>
       {canHover && canScroll.back && (
         <button type='button' aria-label={previousLabel} title={previousLabel} onClick={() => scrollRow(-1)} className={`${arrowButton} left-1`}>
@@ -1442,6 +1424,101 @@ function NewsCarousel ({ segment, locale, query }: { segment: NavListSegment, lo
         </button>
       )}
     </span>
+  )
+}
+
+// A "navlist" reference: news article cards, like ChatGPT's own news
+// carousel minus the thumbnails. Each card opens its article in a new tab.
+type NavListSegment = Extract<ReferenceSegment, { kind: 'navlist' }>
+
+function NewsCarousel ({ segment, locale, query }: { segment: NavListSegment, locale: string, query: string }): JSX.Element {
+  const { previousLabel, nextLabel } = getTranslations({
+    previousLabel: { en: 'Previous articles', nl: 'Vorige artikelen' },
+    nextLabel: { en: 'Next articles', nl: 'Volgende artikelen' },
+  }, locale)
+
+  return (
+    <CardCarousel label={segment.title} previousLabel={previousLabel} nextLabel={nextLabel}>
+      {segment.articles.map((article, i) => {
+        const cardClass = `${carouselCard} ${matchesQuery(article, query) ? matchedRef : ''}`
+        const content = (
+          <>
+            {article.attribution != null && (
+              <span className='flex items-center gap-1 text-grey2 font-semibold min-w-0'>
+                <img src={LinkSvg} className='w-3 h-3 shrink-0' />
+                <span className='truncate'>{highlight(article.attribution, query)}</span>
+              </span>
+            )}
+            <span className='text-sm font-semibold text-black line-clamp-3'>{highlight(article.title ?? article.url ?? '', query)}</span>
+            {article.pubDate != null && (
+              <span className='mt-auto text-grey2'>{formatShortDate(article.pubDate, locale)}</span>
+            )}
+          </>
+        )
+        return article.url != null
+          ? (
+            <a key={i} role='listitem' href={article.url} target='_blank' rel='noopener noreferrer' className={`${cardClass} hover:border-primary`}>
+              {content}
+            </a>
+            )
+          : (
+            <span key={i} role='listitem' className={cardClass}>{content}</span>
+            )
+      })}
+    </CardCarousel>
+  )
+}
+
+// A "products" reference: shopping product cards, like ChatGPT's own product
+// carousel minus the product photos (hosted by OpenAI, so not loaded here).
+// The export carries no link to the product, so a card opens its raw data
+// instead, like a map. Search only matches the fields a card shows: the raw
+// entry also holds long encoded lookup tokens that short terms would match.
+type ProductsSegment = Extract<ReferenceSegment, { kind: 'products' }>
+
+function ProductCarousel ({ segment, locale, query, productLabel, onShowRaw }: { segment: ProductsSegment, locale: string, query: string, productLabel: string, onShowRaw: (data: unknown, parentLabel: string) => void }): JSX.Element {
+  const { previousLabel, nextLabel, productsLabel } = getTranslations({
+    previousLabel: { en: 'Previous products', nl: 'Vorige producten' },
+    nextLabel: { en: 'Next products', nl: 'Volgende producten' },
+    productsLabel: { en: 'Products', nl: 'Producten' },
+  }, locale)
+
+  return (
+    <CardCarousel label={productsLabel} previousLabel={previousLabel} nextLabel={nextLabel}>
+      {segment.products.map((product, i) => {
+        const shown = [product.merchants, product.title, product.description, product.price]
+        return (
+          <span
+            key={i}
+            role='listitem'
+            onClick={() => onShowRaw(product, `${productLabel}: ${product.title ?? ''}`)}
+            className={`${carouselCard} ${clickableRef} ${matchesQuery(shown, query) ? matchedRef : ''}`}
+          >
+            {product.merchants != null && product.merchants !== '' && (
+              <span className='flex items-center gap-1 text-grey2 font-semibold min-w-0'>
+                <img src={ProductSvg} className='w-3 h-3 shrink-0' />
+                <span className='truncate'>{highlight(product.merchants, query)}</span>
+              </span>
+            )}
+            <span className='text-sm font-semibold text-black line-clamp-3'>{highlight(product.title ?? '', query)}</span>
+            {product.description != null && product.description !== '' && (
+              <span className='text-grey2 line-clamp-3'>{highlight(product.description, query)}</span>
+            )}
+            <span className='mt-auto flex flex-wrap items-baseline gap-x-1.5'>
+              {product.price != null && product.price !== '' && (
+                <span className='font-semibold text-black'>{highlight(product.price, query)}</span>
+              )}
+              {product.rating != null && (
+                <span className='text-grey2'>
+                  {product.rating.toLocaleString(locale, { minimumFractionDigits: 1, maximumFractionDigits: 1 })}★
+                  {product.num_reviews != null && ` (${product.num_reviews})`}
+                </span>
+              )}
+            </span>
+          </span>
+        )
+      })}
+    </CardCarousel>
   )
 }
 
@@ -1533,7 +1610,8 @@ function DetailsScreen ({ data, searchQuery = '' }: { data: unknown, searchQuery
 //
 // Markers of type "entity", "url" and "genui" carry their own display data
 // inline (for "genui", a JSON payload - e.g. a chart widget, see
-// resolveGenui). Markers of type "map" and "navlist" (see resolveNavList)
+// resolveGenui). Markers of type "map", "navlist" (see resolveNavList) and
+// "products" (see resolveProducts)
 // are resolved against the message's content_references array
 // positionally: the Nth "map" marker corresponds to the Nth "map"-typed content_references entry,
 // because entries whose type has no marker equivalent (sources_footnote,
@@ -1588,9 +1666,18 @@ const MARKER_RE = new RegExp(
 
 class ReferenceCursor {
   private readonly buckets = new Map<string, ContentReference[]>()
+  // Every product in the message's "products" entries, by its ref token
+  // (`cite`), for an entity marker naming one (see resolveEntity) - which
+  // may come before or after the "products" marker that consumes the entry.
+  readonly products = new Map<string, ProductItem>()
 
   constructor (references: ContentReference[]) {
     for (const ref of references) {
+      if (ref.type === 'products') {
+        for (const product of (ref as ContentReferenceProducts).products ?? []) {
+          if (product.cite != null) this.products.set(product.cite, product)
+        }
+      }
       const key = ReferenceCursor.bucketKey(ref.type)
       const bucket = this.buckets.get(key)
       if (bucket == null) {
@@ -1654,6 +1741,7 @@ function webpageRefTokens (ref: ContentReferenceGroupedWebpages): string[] {
 type EntityRegistry = Map<string, { name: string, url?: string }>
 
 const REF_TOKEN_RE = /^turn\d+\w+\d+$/
+const PRODUCT_TOKEN_RE = /^turn\d+product\d+$/
 
 function resolveMessageReferences (
   message: string,
@@ -1735,6 +1823,8 @@ function resolveMarker (keyword: string, params: string[], marker: string, curso
       return resolveGenui(params, cursor)
     case 'navlist':
       return resolveNavList(params, cursor)
+    case 'products':
+      return resolveProducts(params, cursor)
     default:
       // Any keyword this parser doesn't otherwise recognize (a marker type
       // introduced by a future ChatGPT export version) - best-effort
@@ -1763,6 +1853,17 @@ function resolveEntity (params: string[], cursor: ReferenceCursor, entityRegistr
     }
   } catch {
     name = params[0]
+  }
+
+  // An entity naming a product by its token (e.g. "turn0product10") is
+  // backed by a "product_entity" entry instead of an "entity" one; taking
+  // an "entity" entry here would leave the next real entity without its own.
+  if (token != null && PRODUCT_TOKEN_RE.test(token)) {
+    const productRef = cursor.next('product_entity') as ContentReferenceProductEntity | undefined
+    const product = cursor.products.get(token)
+    if (name == null || name === '') return { kind: 'unknown', keyword: 'entity', raw: productRef ?? { params } }
+    const details = [product?.price, product?.merchants].filter(d => d != null && d !== '').join(' • ')
+    return { kind: 'entity', name, disambiguation: details !== '' ? details : undefined, product: true, raw: productRef ?? product ?? { name } }
   }
 
   const ref = cursor.next('entity') as ContentReferenceEntity | undefined
@@ -1880,6 +1981,34 @@ function resolveNavList (params: string[], cursor: ReferenceCursor): ReferenceSe
 
   if (articles.length === 0) return { kind: 'unknown', keyword: 'navlist', raw: ref ?? { note: 'No matching content reference found', params } }
   return { kind: 'navlist', title: params[0], articles }
+}
+
+// A "products" marker carries a JSON payload naming the products to show,
+// in order, by their ref tokens, e.g.
+// (open)products(sep){"selections":[["turn0product10","Ferrari drain fitting ..."],...]}(close).
+// Its "products" entry is taken by position, like "navlist"; the selections
+// then pick and order that entry's products by their `cite` token. If none
+// match (or the payload doesn't parse), the entry's products are shown as
+// they are rather than nothing.
+function resolveProducts (params: string[], cursor: ReferenceCursor): ReferenceSegment {
+  const ref = cursor.next('products') as ContentReferenceProducts | undefined
+  const available = ref?.products ?? []
+
+  let tokens: string[] = []
+  try {
+    const selections = (JSON.parse(params[0] ?? 'null') as { selections?: unknown } | null)?.selections
+    if (Array.isArray(selections)) {
+      tokens = selections.flatMap(s => Array.isArray(s) && typeof s[0] === 'string' ? [s[0]] : [])
+    }
+  } catch {
+    // Malformed payload: fall back to the entry's own product order.
+  }
+
+  const selected = tokens.flatMap(token => available.filter(p => p.cite === token))
+  const products = selected.length > 0 ? selected : available
+
+  if (products.length === 0) return { kind: 'unknown', keyword: 'products', raw: ref ?? { note: 'No matching content reference found', params } }
+  return { kind: 'products', products }
 }
 
 function resolveImageGroup (params: string[], cursor: ReferenceCursor): ReferenceSegment {
