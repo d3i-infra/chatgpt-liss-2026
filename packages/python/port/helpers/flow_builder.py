@@ -6,6 +6,7 @@ as a generator from script.py via `yield from`.
 """
 from abc import abstractmethod
 from collections.abc import Generator
+import gc
 import json
 import logging
 from typing import cast
@@ -251,8 +252,14 @@ class FlowBuilder:
 
         # 8. Render consent form
         yield from ph.emit_log("info", f"[{self.platform_name}] Consent form shown")
-        review_data_prompt = self.generate_review_data_prompt(result.tables)
-        consent_result = yield ph.render_page(self.UI_TEXT["review_data_header"], review_data_prompt)
+        review_page = [ph.render_page(self.UI_TEXT["review_data_header"], self.generate_review_data_prompt(result.tables))]
+        # Hold no reference to the extracted tables while suspended here: the
+        # donation arrives as this yield's value and is allocated in Pyodide's
+        # memory, which never shrinks, so free the tables first and let it
+        # reuse their space. The page has its own copy; nothing below reads them.
+        del result, raw_result
+        gc.collect()
+        consent_result = yield review_page.pop()
 
         # 9. Donate with per-platform key
         if consent_result.__type__ == "PayloadJSON":

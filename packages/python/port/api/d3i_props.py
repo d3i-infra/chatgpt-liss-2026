@@ -62,8 +62,13 @@ class PropsUIPromptConsentFormTableViz:
     delete_option: Optional[bool] = True
 
     def translate_data_frame(self):
+        # UTF-8 bytes rather than a str: toJs turns bytes into a standalone
+        # Uint8Array whose buffer py_worker.js *transfers* to the page, instead
+        # of converting a large JS string and structured-cloning it (a copy in
+        # the worker plus one per clone side). The page decodes it in
+        # loadDataFrame (consent_form_viz.tsx).
         if isinstance(self.data_frame, pd.DataFrame):
-            return self.data_frame.to_json()
+            return self.data_frame.to_json().encode("utf-8")
         else:
             return self.data_frame
 

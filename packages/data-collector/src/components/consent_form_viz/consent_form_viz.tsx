@@ -2,6 +2,7 @@ import {
   DonateButtons,
   ReactFactoryContext,
 } from "@eyra/feldspar"
+import { loadDataFrame } from "./load_data_frame"
 import TextBundle from "@eyra/feldspar"
 import { resolveText } from "../../locale/text"
 import { 
@@ -225,13 +226,6 @@ function prepareCopy({ description, helpButton, helpText, locale }: Props): Copy
     helpButton: resolveText(helpButton ?? defaultHelpButtonLabel, locale),
     helpText: resolveText(helpText ?? defaultHelpText, locale),
   }
-}
-
-function loadDataFrame(dataFrame: any) {
-  if (typeof dataFrame === "string") {
-      return JSON.parse(dataFrame)
-  } 
-  return dataFrame;
 }
 
 const defaultDonateQuestionLabel = new TextBundle()

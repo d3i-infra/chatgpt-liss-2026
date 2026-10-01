@@ -552,3 +552,37 @@ class TestTooManyFilesSafetyPath:
         with pytest.raises(TaskIncompleteError) as exc:
             gen.send(make_payload("PayloadTrue"))
         assert exc.value.exit_code == 4
+
+
+class TestReviewPageReleasesTables:
+    """While the consent page is shown, the flow must not keep the extracted
+    tables alive: the donation comes back into Pyodide's never-shrinking
+    memory and should be able to reuse their space."""
+
+    def test_tables_are_freed_while_waiting_for_consent(self):
+        import gc
+        import weakref
+        import pandas as pd
+
+        refs = []
+
+        class FreshTablesFlow(StubFlow):
+            def extract_data(self, file, validation):
+                df = pd.DataFrame({"col": [1, 2]})
+                refs.append(weakref.ref(df))
+                table = d3i_props.PropsUIPromptConsentFormTableViz(
+                    id="t", data_frame=df, title=props.Translatable({"en": "T"}))
+                return ExtractionResult(tables=[table], errors=Counter())
+
+        gen = FreshTablesFlow(tables=[]).start_flow()
+        start_and_skip_logs(gen)
+        cmd = advance_past_logs(gen, make_payload_file())
+        assert isinstance(cmd, CommandUIRender)
+        assert refs[0]() is not None  # the yielded page still carries the table
+
+        del cmd  # ScriptWrapper converts the command with toDict() and drops it
+        gc.collect()
+        assert refs[0]() is None
+
+        cmd = advance_past_logs(gen, make_payload("PayloadJSON", value='{"data": "test"}'))
+        assert isinstance(cmd, CommandSystemDonate)
