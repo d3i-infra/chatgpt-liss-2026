@@ -211,6 +211,23 @@ def donate(key: str, json_string: str) -> CommandSystemDonate:
     return CommandSystemDonate(key, json_string)
 
 
+def donate_staged(key: str, staged_id: str) -> CommandSystemDonate:
+    """
+    Donates data the page has staged (a PayloadStagedDonation from the consent page).
+
+    The command carries only the staging id; the page substitutes the data right
+    before handing it to the host, so the donation never passes through Python.
+
+    Args:
+        key (str): The key associated with the donation process. The key will be used in the file name.
+        staged_id (str): The id from the PayloadStagedDonation.
+
+    Returns:
+        CommandSystemDonate: A system command that initiates the donation process. Must be yielded.
+    """
+    return CommandSystemDonate(key, "", staged_id)
+
+
 def exit(code: int, info: str) -> CommandSystemExit:
     """
     Exits Next with the provided exit code and additional information.

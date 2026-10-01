@@ -552,3 +552,65 @@ class TestTooManyFilesSafetyPath:
         with pytest.raises(TaskIncompleteError) as exc:
             gen.send(make_payload("PayloadTrue"))
         assert exc.value.exit_code == 4
+
+
+class TestReviewPageReleasesTables:
+    """While the consent page is shown, the flow must not keep the extracted
+    tables alive: the donation comes back into Pyodide's never-shrinking
+    memory and should be able to reuse their space."""
+
+    def test_tables_are_freed_while_waiting_for_consent(self):
+        import gc
+        import weakref
+        import pandas as pd
+
+        refs = []
+
+        class FreshTablesFlow(StubFlow):
+            def extract_data(self, file, validation):
+                df = pd.DataFrame({"col": [1, 2]})
+                refs.append(weakref.ref(df))
+                table = d3i_props.PropsUIPromptConsentFormTableViz(
+                    id="t", data_frame=df, title=props.Translatable({"en": "T"}))
+                return ExtractionResult(tables=[table], errors=Counter())
+
+        gen = FreshTablesFlow(tables=[]).start_flow()
+        start_and_skip_logs(gen)
+        cmd = advance_past_logs(gen, make_payload_file())
+        assert isinstance(cmd, CommandUIRender)
+        assert refs[0]() is not None  # the yielded page still carries the table
+
+        del cmd  # ScriptWrapper converts the command with toDict() and drops it
+        gc.collect()
+        assert refs[0]() is None
+
+        cmd = advance_past_logs(gen, make_payload("PayloadJSON", value='{"data": "test"}'))
+        assert isinstance(cmd, CommandSystemDonate)
+
+
+class TestStagedDonation:
+    """The consent page can stage the reviewed data and answer with its id only;
+    the flow then donates by reference and the data never enters Python."""
+
+    def _to_consent(self):
+        gen = StubFlow().start_flow()
+        start_and_skip_logs(gen)
+        cmd = advance_past_logs(gen, make_payload_file())
+        assert isinstance(cmd, CommandUIRender)
+        return gen
+
+    def test_staged_consent_donates_by_reference(self):
+        gen = self._to_consent()
+        cmd = advance_past_logs(gen, make_payload("PayloadStagedDonation", value="staged-7", size=123))
+        assert isinstance(cmd, CommandSystemDonate)
+        d = cmd.toDict()
+        assert d["key"] == "test-session-testplatform"
+        assert d["staged_id"] == "staged-7"
+        assert d["json_string"] == ""
+
+    def test_json_consent_still_donates_the_data(self):
+        gen = self._to_consent()
+        cmd = advance_past_logs(gen, make_payload("PayloadJSON", value='{"data": "test"}'))
+        d = cmd.toDict()
+        assert d["json_string"] == '{"data": "test"}'
+        assert "staged_id" not in d
