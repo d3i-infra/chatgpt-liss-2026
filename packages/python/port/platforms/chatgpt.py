@@ -141,8 +141,8 @@ def conversations_to_df(reader: ZipArchiveReader, errors: Counter) -> pd.DataFra
             "nl": "1. Uw gesprekken"
           },
           "description": {
-            "en": "Below you find your conversations with ChatGPT. You can review the content of a conversation by clicking on it. You can also search through the conversations by typing in the search box, selecting a period in the timeline, or clicking on words in the word cloud. See the help buttons for each component for further explanation.",
-            "nl": "Hieronder vindt u uw gesprekken met ChatGPT. U kunt de inhoud van een gesprek bekijken door erop te klikken. U kunt ook door de gesprekken zoeken door iets in het zoekvak te typen, een periode in de tijdlijn te selecteren of op woorden in de woordwolk te klikken. Zie de helpknoppen voor elk onderdeel voor meer uitleg."
+            "en": "Below you find your conversations with ChatGPT. You can review the content of a conversation by clicking on it. You can also search through the conversations by typing in the search box. See the help buttons for further explanation.",
+            "nl": "Hieronder vindt u uw gesprekken met ChatGPT. U kunt de inhoud van een gesprek bekijken door erop te klikken. U kunt ook door de gesprekken zoeken door iets in het zoekvak te typen. Zie de helpknoppen voor meer uitleg."
           },
           "headers": {
             "conversation title": {"en": "Conversation title", "nl": "Gesprektitel"},
@@ -176,25 +176,6 @@ def conversations_to_df(reader: ZipArchiveReader, errors: Counter) -> pd.DataFra
               "hiddenColumn": "hidden",
               "contentTypeColumn": "content type",
               "height": 500
-            },
-            {
-              "title": {
-                "en": "Your messages over time",
-                "nl": "Uw berichten door de tijd"
-              },
-              "type": "calendar_heatmap",
-              "dateColumn": "time",
-              "row": 1
-            },
-            {
-              "title": {
-                "en": "Your messages in a wordcloud",
-                "nl": "Je berichten in een woordwolk"
-              },
-              "type": "wordcloud",
-              "textColumn": "message",
-              "tokenize": true,
-              "row": 1
             }
           ]
         }

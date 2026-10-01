@@ -1,6 +1,6 @@
 // Drift guard between this study's real config and the worker column
-// projection (ADR-0032): every column the conversation and calendar
-// visualizations declare must survive selectVisualizationColumns and resolve
+// projection (ADR-0032): every column the configured conversation (and, when
+// present, calendar) visualizations declare must survive selectVisualizationColumns and resolve
 // downstream. A projection that drops one fails here with the same
 // "column chatgpt_conversations.time not found" a participant would see.
 //
@@ -23,6 +23,10 @@ const describeWithConfig = hasConfig ? describe : describe.skip
 const config = hasConfig ? JSON.parse(fs.readFileSync(configPath, 'utf-8')) : null
 const convTable = config?.tables.find((t: any) => t.id === 'chatgpt_conversations')
 const COLUMNS: string[] = convTable != null ? Object.keys(convTable.headers) : []
+// The study may drop the calendar from its config (it did, to save memory);
+// the guard then has nothing to check for it.
+const calendarViz = convTable?.visualizations.find((v: any) => v.type === 'calendar_heatmap')
+const itWithCalendar = calendarViz != null ? it : it.skip
 
 function row (id: string, title: string, role: string, message: string, time: string) {
   const byName: Record<string, string> = {
@@ -70,8 +74,8 @@ describeWithConfig('real chatgpt config through the column projection', () => {
     expect(removed[0].id).toBe('r3')
   })
 
-  it('the calendar heatmap resolves its date column and keeps row text searchable', async () => {
-    const viz = convTable.visualizations.find((v: any) => v.type === 'calendar_heatmap')
+  itWithCalendar('the calendar heatmap resolves its date column and keeps row text searchable', async () => {
+    const viz = calendarViz
     const projected = selectVisualizationColumns(table, viz as CalendarVisualization)
     const data = await prepareCalendarData(projected, viz as CalendarVisualization)
 
