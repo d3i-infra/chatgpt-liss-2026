@@ -15,7 +15,7 @@ The consent-viz prompt consumes shared feldspar components such as `DonateButton
 
 ## Guidance
 
-- Wire donate/cancel by passing `handleDonate`/`handleCancel` into a directly imported `DonateButtons` — do not route table data through `DataSubmissionPage`'s `onDataSubmissionDataChanged`/`DonateButtonsFactory` path; the component builds its own `PayloadJSON` from `serializeConsentData()` at click time.
+- Wire donate/cancel by passing `handleDonate`/`handleCancel` into a directly imported `DonateButtons` — do not route table data through `DataSubmissionPage`'s `onDataSubmissionDataChanged`/`DonateButtonsFactory` path; the component builds its own payload from `serializeConsentData()` at click time and stages it (ADR-0041).
 - Review rejects pushing serialized consent tables into `onDataSubmissionDataChanged` or composing the consent-viz page from a separate `PropsUIDataSubmissionButtons` body item, until upstream stops holding a page-lifetime payload copy and double-stringifying at donate.
 - Revisit if upstream `data_submission_page.tsx` moves to lazy pull-at-donate and drops its payload `console.log`s (tracked in UPSTREAM_REQUESTS).
 

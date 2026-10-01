@@ -586,3 +586,31 @@ class TestReviewPageReleasesTables:
 
         cmd = advance_past_logs(gen, make_payload("PayloadJSON", value='{"data": "test"}'))
         assert isinstance(cmd, CommandSystemDonate)
+
+
+class TestStagedDonation:
+    """The consent page can stage the reviewed data and answer with its id only;
+    the flow then donates by reference and the data never enters Python."""
+
+    def _to_consent(self):
+        gen = StubFlow().start_flow()
+        start_and_skip_logs(gen)
+        cmd = advance_past_logs(gen, make_payload_file())
+        assert isinstance(cmd, CommandUIRender)
+        return gen
+
+    def test_staged_consent_donates_by_reference(self):
+        gen = self._to_consent()
+        cmd = advance_past_logs(gen, make_payload("PayloadStagedDonation", value="staged-7", size=123))
+        assert isinstance(cmd, CommandSystemDonate)
+        d = cmd.toDict()
+        assert d["key"] == "test-session-testplatform"
+        assert d["staged_id"] == "staged-7"
+        assert d["json_string"] == ""
+
+    def test_json_consent_still_donates_the_data(self):
+        gen = self._to_consent()
+        cmd = advance_past_logs(gen, make_payload("PayloadJSON", value='{"data": "test"}'))
+        d = cmd.toDict()
+        assert d["json_string"] == '{"data": "test"}'
+        assert "staged_id" not in d

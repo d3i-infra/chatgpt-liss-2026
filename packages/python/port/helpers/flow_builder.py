@@ -262,19 +262,28 @@ class FlowBuilder:
         consent_result = yield review_page.pop()
 
         # 9. Donate with per-platform key
-        if consent_result.__type__ == "PayloadJSON":
-            reviewed_data = consent_result.value
+        donate_key = f"{self.session_id}-{self.platform_name.lower()}"
+        if consent_result.__type__ == "PayloadStagedDonation":
+            # The page staged the reviewed data; only its id comes here, and the
+            # page sends the data to the host itself.
+            donate_command = ph.donate_staged(donate_key, consent_result.value)
+            payload_size = consent_result.size
+            yield from ph.emit_log("info", f"[{self.platform_name}] Consent: accepted")
+        elif consent_result.__type__ == "PayloadJSON":
+            donate_command = ph.donate(donate_key, consent_result.value)
+            payload_size = len(consent_result.value)
             yield from ph.emit_log("info", f"[{self.platform_name}] Consent: accepted")
         elif consent_result.__type__ == "PayloadFalse":
             reviewed_data = json.dumps({"status": "data_submission declined"})
+            donate_command = ph.donate(donate_key, reviewed_data)
+            payload_size = len(reviewed_data)
             yield from ph.emit_log("info", f"[{self.platform_name}] Consent: declined")
         else:
             return
 
-        donate_key = f"{self.session_id}-{self.platform_name.lower()}"
         is_decline = consent_result.__type__ == "PayloadFalse"
-        yield from ph.emit_log("info", f"[{self.platform_name}] Donation started: payload size={len(reviewed_data)} bytes")
-        donate_result = yield ph.donate(donate_key, reviewed_data)
+        yield from ph.emit_log("info", f"[{self.platform_name}] Donation started: payload size={payload_size} bytes")
+        donate_result = yield donate_command
 
         # 11. Inspect donate result
         # For declines, don't show failure UI — the participant chose not to donate,

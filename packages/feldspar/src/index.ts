@@ -29,3 +29,4 @@ export {
   isInstanceOf,
 } from './framework/helpers'
 export { DonateButtons } from './framework/visualization/react/ui/prompts/donate_buttons'
+export { stageDonation } from './framework/staged_donations'

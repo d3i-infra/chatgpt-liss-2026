@@ -1,6 +1,7 @@
 import { Command, Response, isCommandSystem, isCommandSystemDonate, isCommandSystemExit, isCommandUI, CommandUI, CommandSystem } from './types/commands'
 import { CommandHandler, Bridge } from './types/modules'
 import ReactEngine from './visualization/react/engine'
+import { takeStagedDonation } from './staged_donations'
 
 export default class CommandRouter implements CommandHandler {
   bridge: Bridge
@@ -39,7 +40,20 @@ export default class CommandRouter implements CommandHandler {
     }
 
     if (isCommandSystemDonate(command)) {
-      const result = await this.bridge.send(command)
+      // A staged donation is resolved here, so the data goes from the UI to the
+      // bridge without passing through the worker and the script. The response
+      // keeps the original (id-only) command: it is posted back to the worker.
+      let outgoing = command
+      if (command.staged_id != null) {
+        const jsonString = takeStagedDonation(command.staged_id)
+        if (jsonString === undefined) {
+          console.error('[CommandRouter] No staged donation for', command.staged_id)
+          const value = { success: false, key: command.key, status: 0, error: 'Staged donation not found' }
+          return { __type__: 'Response', command, payload: { __type__: 'PayloadResponse', value } }
+        }
+        outgoing = { __type__: 'CommandSystemDonate', key: command.key, json_string: jsonString }
+      }
+      const result = await this.bridge.send(outgoing)
       if (result !== undefined) {
         console.log('[CommandRouter] Donate result:', result)
         return { __type__: 'Response', command, payload: { __type__: 'PayloadResponse', value: result } }

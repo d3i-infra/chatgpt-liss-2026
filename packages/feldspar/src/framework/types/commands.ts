@@ -45,6 +45,7 @@ export type PayloadResolved =
   PayloadFile |
   PayloadFiles |
   PayloadJSON |
+  PayloadStagedDonation |
   PayloadResponse
 
 export interface PayloadVoid {
@@ -81,6 +82,17 @@ export interface PayloadJSON {
 }
 export function isPayloadJSON (arg: any): arg is PayloadJSON {
   return isInstanceOf<PayloadJSON>(arg, 'PayloadJSON', ['value'])
+}
+
+// The UI staged its donation (staged_donations.ts) and passes only the id and
+// the payload's length, so the data itself does not travel to the script.
+export interface PayloadStagedDonation {
+  __type__: 'PayloadStagedDonation'
+  value: string
+  size: number
+}
+export function isPayloadStagedDonation (arg: any): arg is PayloadStagedDonation {
+  return isInstanceOf<PayloadStagedDonation>(arg, 'PayloadStagedDonation', ['value', 'size'])
 }
 
 // Wraps a ResponseSystemDonate so Python can inspect the donation outcome.
@@ -149,6 +161,9 @@ export interface CommandSystemDonate {
   __type__: 'CommandSystemDonate'
   key: string
   json_string: string
+  // Set when the data was staged by the UI; CommandRouter replaces json_string
+  // with the staged payload before the bridge sees the command.
+  staged_id?: string | null
 }
 export function isCommandSystemDonate (arg: any): arg is CommandSystemDonate {
   return isInstanceOf<CommandSystemDonate>(arg, 'CommandSystemDonate', ['key', 'json_string'])

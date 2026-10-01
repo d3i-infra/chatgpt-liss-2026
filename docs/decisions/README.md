@@ -65,6 +65,7 @@ Load the ADR(s) whose filename matches the area you are touching.
 ### Performance
 
 - [0034 — Hold participant-flow peak memory to the reference budget](./0034-hold-participant-flow-peak-memory-to-the-reference-budget.md)
+- [0041 — Donate consent-page data by staged reference, not through Python](./0041-donate-consent-page-data-by-staged-reference-not-through-python.md)
 
 ### Architecture
 
