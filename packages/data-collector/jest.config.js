@@ -10,6 +10,7 @@ export default {
   // exercise the real feldspar code. See src/test_support/feldspar_test_shim.ts.
   moduleNameMapper: {
     '^@eyra/feldspar$': '<rootDir>/src/test_support/feldspar_test_shim.ts',
+    '\\.(svg|png|jpe?g|gif)$': '<rootDir>/src/test_support/file_stub.ts',
   },
   transform: {
     '^.+\\.tsx?$': ['ts-jest', {

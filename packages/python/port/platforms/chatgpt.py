@@ -137,8 +137,8 @@ def conversations_to_df(reader: ZipArchiveReader, errors: Counter) -> pd.DataFra
           "id": "chatgpt_conversations",
           "show_grid": false,
           "title": {
-            "en": "1. Your conversations",
-            "nl": "1. Uw gesprekken"
+            "en": "Your conversations",
+            "nl": "Uw gesprekken"
           },
           "description": {
             "en": "Below you find your conversations with ChatGPT. You can review the content of a conversation by clicking on it. You can also search through the conversations by typing in the search box, selecting a period in the timeline, or clicking on words in the word cloud. See the help buttons for each component for further explanation.",
@@ -250,27 +250,25 @@ def conversations_to_df(reader: ZipArchiveReader, errors: Counter) -> pd.DataFra
                             message = " ".join(part for part in message if isinstance(part, str))
 
                     denested_d = eh.dict_denester(turn)
-                    is_hidden = eh.find_item(denested_d, "is_visually_hidden_from_conversation")
-                    if is_hidden != "True":
-                        role = eh.find_item(denested_d, "role")
-                        model = eh.find_item(denested_d, "-model_slug")
-                        reaction_to = eh.find_item(denested_d, "parent")
-                        time = eh.epoch_to_iso(eh.find_item(denested_d, "create_time"), errors=errors)
-                        datapoint = {
-                            "conversation title": title,
-                            "role": role,
-                            "message": redact.redact(message),
-                            "content type": content_type,
-                            "model": model,
-                            "time": time,
-                            "message id": id,
-                            "reaction to": reaction_to,
-                            "hidden": shown_ids is not None and id not in shown_ids,
-                            "content references": redact.redact_json(content_references),
-                            "search_result_groups": redact.redact_json(search_result_groups),
-                        }
-                        if role != "":
-                            datapoints.append(datapoint)
+                    role = eh.find_item(denested_d, "role")
+                    model = eh.find_item(denested_d, "-model_slug")
+                    reaction_to = eh.find_item(denested_d, "parent")
+                    time = eh.epoch_to_iso(eh.find_item(denested_d, "create_time"), errors=errors)
+                    datapoint = {
+                        "conversation title": title,
+                        "role": role,
+                        "message": redact.redact(message),
+                        "content type": content_type,
+                        "model": model,
+                        "time": time,
+                        "message id": id,
+                        "reaction to": reaction_to,
+                        "hidden": shown_ids is not None and id not in shown_ids,
+                        "content references": redact.redact_json(content_references),
+                        "search_result_groups": redact.redact_json(search_result_groups),
+                    }
+                    if role != "":
+                        datapoints.append(datapoint)
 
         out = pd.DataFrame(datapoints)
 

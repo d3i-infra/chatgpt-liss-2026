@@ -69,11 +69,11 @@ class FlowBuilder:
                 "es": f"Seleccione su archivo de {self.platform_name}",
             }),
             "review_data_header": props.Translatable({
-                "en": f"Step 1. Inspect your {self.platform_name} data",
-                "nl": f"Stap 1. Inspecteer uw {self.platform_name} gegevens",
-                "de": f"Schritt 1. Überprüfen Sie Ihre {self.platform_name}-Daten",
-                "it": f"Passo 1. Esamini i suoi dati di {self.platform_name}",
-                "es": f"Paso 1. Revise sus datos de {self.platform_name}",
+                "en": f"Inspect your {self.platform_name} data",
+                "nl": f"Inspecteer uw {self.platform_name} gegevens",
+                "de": f"Überprüfen Sie Ihre {self.platform_name}-Daten",
+                "it": f"Esamini i suoi dati di {self.platform_name}",
+                "es": f"Revise sus datos de {self.platform_name}",
             }),
             "retry_header": props.Translatable({
                 "en": "Try again",

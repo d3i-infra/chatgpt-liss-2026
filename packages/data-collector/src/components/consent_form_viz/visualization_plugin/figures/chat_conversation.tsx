@@ -1718,9 +1718,46 @@ class ReferenceCursor {
     const bucket = this.buckets.get('grouped_webpages')
     if (bucket == null) return undefined
     const matches = bucket.filter(ref => webpageRefTokens(ref as ContentReferenceGroupedWebpages).some(t => tokens.has(t)))
-    const ref = matches.find(m => !this.usedWebpages.has(m)) ?? matches[0]
+    const ref = matches.find(m => !this.usedWebpages.has(m)) ?? matches[0] ?? this.matchByTurnAlias(bucket, tokens)
     if (ref != null) this.usedWebpages.add(ref)
     return ref as ContentReferenceGroupedWebpages | undefined
+  }
+
+  // Marker turn number -> the `turn_index` it stands for in `refs`, learned
+  // per message (see matchByTurnAlias).
+  private readonly turnAliases = new Map<string, number>()
+
+  // Some exports (observed on scheduled-task messages) put an opaque turn
+  // number in the marker (e.g. "turn965186view2") while the entry's `refs`
+  // carry the real turn_index (7), so no token matches exactly. Falls back to
+  // matching every token on ref_type + ref_index alone, with each marker turn
+  // number standing for one turn_index throughout the message (and vice
+  // versa) - ref_type + ref_index by itself is ambiguous, as each turn has
+  // its own "view2". Entries not yet matched are preferred, in array order.
+  private matchByTurnAlias (bucket: ContentReference[], tokens: Set<string>): ContentReference | undefined {
+    const parsed = [...tokens].map(t => REF_TOKEN_PARTS_RE.exec(t))
+    if (parsed.length === 0 || parsed.some(p => p == null)) return undefined
+    const candidates = [...bucket.filter(r => !this.usedWebpages.has(r)), ...bucket.filter(r => this.usedWebpages.has(r))]
+    for (const ref of candidates) {
+      const refs = ((ref as ContentReferenceGroupedWebpages).items ?? []).flatMap(item => item.refs ?? [])
+      const aliases = new Map(this.turnAliases)
+      const fits = parsed.every(p => {
+        const [, turn, type, index] = p as RegExpExecArray
+        const known = aliases.get(turn)
+        const claimed = new Set([...aliases].filter(([t]) => t !== turn).map(([, i]) => i))
+        const hit = refs.find(r =>
+          r.ref_type === type && String(r.ref_index) === index &&
+          (known != null ? r.turn_index === known : !claimed.has(r.turn_index))
+        )
+        if (hit != null) aliases.set(turn, hit.turn_index)
+        return hit != null
+      })
+      if (fits) {
+        aliases.forEach((index, turn) => this.turnAliases.set(turn, index))
+        return ref
+      }
+    }
+    return undefined
   }
 }
 
@@ -1741,9 +1778,10 @@ function webpageRefTokens (ref: ContentReferenceGroupedWebpages): string[] {
 type EntityRegistry = Map<string, { name: string, url?: string }>
 
 const REF_TOKEN_RE = /^turn\d+\w+\d+$/
+const REF_TOKEN_PARTS_RE = /^turn(\d+)([A-Za-z_]+)(\d+)$/
 const PRODUCT_TOKEN_RE = /^turn\d+product\d+$/
 
-function resolveMessageReferences (
+export function resolveMessageReferences (
   message: string,
   references: ContentReference[] | undefined
 ): MessageSegment[] {
