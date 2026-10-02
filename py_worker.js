@@ -3,7 +3,9 @@ let pyScript;
 console.log("[ProcessingWorker] Worker loaded");
 
 onmessage = (event) => {
-  console.log("[ProcessingWorker] Received event: ", event.data);
+  // Log types only: payloads include the participant's data (the consent
+  // tables, the donation), and logging them stringifies or retains full copies.
+  console.log("[ProcessingWorker] Received event: " + event.data.eventType);
   const { eventType } = event.data;
   switch (eventType) {
     case "initialise":
@@ -35,7 +37,7 @@ onmessage = (event) => {
 };
 
 function runCycle(payload) {
-  console.log("[ProcessingWorker] runCycle " + JSON.stringify(payload));
+  console.log("[ProcessingWorker] runCycle " + (payload && payload.__type__));
   let scriptEvent;
   try {
     scriptEvent = pyScript.send(payload);
@@ -51,13 +53,16 @@ function runCycle(payload) {
     return;
   }
   try {
-    self.postMessage({
-      eventType: "runCycleDone",
-      scriptEvent: scriptEvent.toJs({
-        create_proxies: false,
-        dict_converter: Object.fromEntries,
-      }),
+    const event = scriptEvent.toJs({
+      create_proxies: false,
+      dict_converter: Object.fromEntries,
     });
+    // Release the Python-side command (and the bytes it holds) now rather
+    // than whenever the proxy is finalized, so Pyodide can reuse that memory.
+    scriptEvent.destroy();
+    // Move large byte payloads (a consent table's data_frame, see
+    // d3i_props.translate_data_frame) to the page instead of copying them.
+    self.postMessage({ eventType: "runCycleDone", scriptEvent: event }, transferablesOf(event));
   } catch (error) {
     console.error("[ProcessingWorker] Error in toJs/postMessage:", error);
     self.postMessage({
@@ -65,6 +70,24 @@ function runCycle(payload) {
       scriptEvent: generateErrorMessage(String(error)),
     });
   }
+}
+
+// ArrayBuffers of standalone typed arrays anywhere in a converted command.
+// A view into Pyodide's own WASM memory is never transferred: that would
+// detach the heap under the running interpreter.
+function transferablesOf(value) {
+  const heap = self.pyodide._module.HEAPU8.buffer;
+  const found = new Set();
+  const visit = (v) => {
+    if (v === null || typeof v !== "object") return;
+    if (ArrayBuffer.isView(v)) {
+      if (v.buffer !== heap && v.byteOffset === 0 && v.byteLength === v.buffer.byteLength) found.add(v.buffer);
+      return;
+    }
+    for (const item of Array.isArray(v) ? v : Object.values(v)) visit(item);
+  };
+  visit(value);
+  return [...found];
 }
 
 function generateErrorMessage(message) {
@@ -88,9 +111,7 @@ function generateErrorMessage(message) {
 }
 
 function unwrap(response) {
-  console.log(
-    "[ProcessingWorker] unwrap response: " + JSON.stringify(response.payload)
-  );
+  console.log("[ProcessingWorker] unwrap response: " + response.payload.__type__);
   return new Promise((resolve) => {
     switch (response.payload.__type__) {
       case "PayloadFile":
