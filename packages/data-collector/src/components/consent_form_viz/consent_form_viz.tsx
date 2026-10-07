@@ -1,7 +1,6 @@
 import {
   DonateButtons,
   ReactFactoryContext,
-  stageDonation,
 } from "@eyra/feldspar"
 import { loadDataFrame } from "./load_data_frame"
 import TextBundle from "@eyra/feldspar"
@@ -132,11 +131,8 @@ export const ConsentFormViz = (props: Props): ReactElement => {
   }, [])
 
   function handleDonate(): void {
-    // Stage the donation here and answer with its id only: the data then goes
-    // straight to the bridge (CommandRouter) instead of through the worker and
-    // Python and back, which cost more memory than any other step.
     const value = serializeConsentData()
-    resolve?.({ __type__: "PayloadStagedDonation", value: stageDonation(value), size: value.length })
+    resolve?.({ __type__: "PayloadJSON", "value": value })
   }
 
   function handleCancel(): void {
