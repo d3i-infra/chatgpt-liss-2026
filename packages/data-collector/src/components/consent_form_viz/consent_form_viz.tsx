@@ -1,7 +1,6 @@
 import {
   DonateButtons,
   ReactFactoryContext,
-  stageDonation,
 } from "@eyra/feldspar"
 import { loadDataFrame } from "./load_data_frame"
 import TextBundle from "@eyra/feldspar"
@@ -19,6 +18,7 @@ import {
 import { useCallback, useEffect, useRef, useState, ReactElement } from "react"
 import _ from "lodash"
 import { TableContainer } from "./table_container"
+import { encodeConsentData } from "./encode_consent_data"
 
 type Props = PropsUIPromptConsentFormViz & ReactFactoryContext
 
@@ -132,11 +132,11 @@ export const ConsentFormViz = (props: Props): ReactElement => {
   }, [])
 
   function handleDonate(): void {
-    // Stage the donation here and answer with its id only: the data then goes
-    // straight to the bridge (CommandRouter) instead of through the worker and
-    // Python and back, which cost more memory than any other step.
-    const value = serializeConsentData()
-    resolve?.({ __type__: "PayloadStagedDonation", value: stageDonation(value), size: value.length })
+    // UTF-8 bytes, not the string: the bytes are transferred to the worker and pass
+    // through Python untouched, where a string would be converted twice at a cost of
+    // hundreds of MB (scripts/benchmarks/roundtrip/RESULTS.md). The host still
+    // receives the string; CommandRouter decodes once.
+    resolve?.({ __type__: "PayloadJSON", value: encodeConsentData(serializeConsentData()) })
   }
 
   function handleCancel(): void {

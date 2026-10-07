@@ -588,29 +588,38 @@ class TestReviewPageReleasesTables:
         assert isinstance(cmd, CommandSystemDonate)
 
 
-class TestStagedDonation:
-    """The consent page can stage the reviewed data and answer with its id only;
-    the flow then donates by reference and the data never enters Python."""
+class BytesProxy:
+    """Stands in for the JsProxy of the Uint8Array the consent page donates: never a
+    str, converted only through to_bytes()."""
 
-    def _to_consent(self):
-        gen = StubFlow().start_flow()
-        start_and_skip_logs(gen)
-        cmd = advance_past_logs(gen, make_payload_file())
-        assert isinstance(cmd, CommandUIRender)
+    def __init__(self, data: bytes):
+        self._data = data
+        self.to_bytes_calls = 0
+
+    def __len__(self):
+        return len(self._data)
+
+    def to_bytes(self):
+        self.to_bytes_calls += 1
+        return self._data
+
+
+class TestBytesDonation:
+    """The consent-viz page donates UTF-8 bytes (a JsProxy in Pyodide). Without a key
+    the flow passes the object through untouched: Pyodide converts a str both ways at
+    a cost of hundreds of MB, and the bytes need no conversion at all."""
+
+    def _reach_consent(self, flow):
+        gen = flow.start_flow()
+        assert isinstance(start_and_skip_logs(gen), CommandUIRender)
+        assert isinstance(advance_past_logs(gen, make_payload_file()), CommandUIRender)
         return gen
 
-    def test_staged_consent_donates_by_reference(self):
-        gen = self._to_consent()
-        cmd = advance_past_logs(gen, make_payload("PayloadStagedDonation", value="staged-7", size=123))
+    def test_plaintext_passes_the_bytes_object_through_untouched(self):
+        flow = StubFlow()
+        gen = self._reach_consent(flow)
+        proxy = BytesProxy(b'{"data": "test"}')
+        cmd = advance_past_logs(gen, make_payload("PayloadJSON", value=proxy))
         assert isinstance(cmd, CommandSystemDonate)
-        d = cmd.toDict()
-        assert d["key"] == "test-session-testplatform"
-        assert d["staged_id"] == "staged-7"
-        assert d["json_string"] == ""
-
-    def test_json_consent_still_donates_the_data(self):
-        gen = self._to_consent()
-        cmd = advance_past_logs(gen, make_payload("PayloadJSON", value='{"data": "test"}'))
-        d = cmd.toDict()
-        assert d["json_string"] == '{"data": "test"}'
-        assert "staged_id" not in d
+        assert cmd.json_string is proxy
+        assert proxy.to_bytes_calls == 0

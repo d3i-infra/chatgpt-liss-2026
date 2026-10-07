@@ -1,7 +1,6 @@
 import { Command, Response, isCommandSystem, isCommandSystemDonate, isCommandSystemExit, isCommandUI, CommandUI, CommandSystem } from './types/commands'
 import { CommandHandler, Bridge } from './types/modules'
 import ReactEngine from './visualization/react/engine'
-import { takeStagedDonation } from './staged_donations'
 
 export default class CommandRouter implements CommandHandler {
   bridge: Bridge
@@ -40,24 +39,20 @@ export default class CommandRouter implements CommandHandler {
     }
 
     if (isCommandSystemDonate(command)) {
-      // A staged donation is resolved here, so the data goes from the UI to the
-      // bridge without passing through the worker and the script. The response
-      // keeps the original (id-only) command: it is posted back to the worker.
-      let outgoing = command
-      if (command.staged_id != null) {
-        const jsonString = takeStagedDonation(command.staged_id)
-        if (jsonString === undefined) {
-          console.error('[CommandRouter] No staged donation for', command.staged_id)
-          const value = { success: false, key: command.key, status: 0, error: 'Staged donation not found' }
-          return { __type__: 'Response', command, payload: { __type__: 'PayloadResponse', value } }
-        }
-        outgoing = { __type__: 'CommandSystemDonate', key: command.key, json_string: jsonString }
-      }
+      // The host contract is a string; a donation that travelled through Python as
+      // UTF-8 bytes is decoded here, once. The Response echoed to the worker keeps
+      // the command's shape without the donation: the worker hands only the payload
+      // to Python, so that copy would never be read.
+      const outgoing = typeof command.json_string === 'string'
+        ? command
+        : { ...command, json_string: new TextDecoder().decode(command.json_string) }
+      const echoed = { ...command, json_string: '' }
       const result = await this.bridge.send(outgoing)
       if (result !== undefined) {
         console.log('[CommandRouter] Donate result:', result)
-        return { __type__: 'Response', command, payload: { __type__: 'PayloadResponse', value: result } }
+        return { __type__: 'Response', command: echoed, payload: { __type__: 'PayloadResponse', value: result } }
       }
+      return { __type__: 'Response', command: echoed, payload: { __type__: 'PayloadVoid', value: undefined } }
     } else {
       await this.bridge.send(command)
     }

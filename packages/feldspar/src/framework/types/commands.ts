@@ -45,7 +45,6 @@ export type PayloadResolved =
   PayloadFile |
   PayloadFiles |
   PayloadJSON |
-  PayloadStagedDonation |
   PayloadResponse
 
 export interface PayloadVoid {
@@ -76,23 +75,15 @@ export interface PayloadFiles {
   value: File[]
 }
 
+// `value` is the JSON text as a string, or as UTF-8 bytes (a standalone Uint8Array)
+// when the producer wants it transferred to the worker and passed through Python
+// without conversion (the consent page's donation).
 export interface PayloadJSON {
   __type__: 'PayloadJSON'
-  value: string
+  value: string | Uint8Array
 }
 export function isPayloadJSON (arg: any): arg is PayloadJSON {
   return isInstanceOf<PayloadJSON>(arg, 'PayloadJSON', ['value'])
-}
-
-// The UI staged its donation (staged_donations.ts) and passes only the id and
-// the payload's length, so the data itself does not travel to the script.
-export interface PayloadStagedDonation {
-  __type__: 'PayloadStagedDonation'
-  value: string
-  size: number
-}
-export function isPayloadStagedDonation (arg: any): arg is PayloadStagedDonation {
-  return isInstanceOf<PayloadStagedDonation>(arg, 'PayloadStagedDonation', ['value', 'size'])
 }
 
 // Wraps a ResponseSystemDonate so Python can inspect the donation outcome.
@@ -157,13 +148,13 @@ export function isCommandSystemLog (arg: any): arg is CommandSystemLog {
   return isInstanceOf<CommandSystemLog>(arg, 'CommandSystemLog', ['level', 'message', 'json_string'])
 }
 
+// json_string is a string on the bridge (the host contract); it arrives from Python as
+// UTF-8 bytes when the donation was passed through untouched, and CommandRouter
+// decodes it before sending.
 export interface CommandSystemDonate {
   __type__: 'CommandSystemDonate'
   key: string
-  json_string: string
-  // Set when the data was staged by the UI; CommandRouter replaces json_string
-  // with the staged payload before the bridge sees the command.
-  staged_id?: string | null
+  json_string: string | Uint8Array
 }
 export function isCommandSystemDonate (arg: any): arg is CommandSystemDonate {
   return isInstanceOf<CommandSystemDonate>(arg, 'CommandSystemDonate', ['key', 'json_string'])
