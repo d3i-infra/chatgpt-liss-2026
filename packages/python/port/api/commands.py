@@ -12,6 +12,8 @@ class CommandUIRender:
 
 
 class CommandSystemDonate:
+    # json_string: the donation as a str, or the JsProxy of the UTF-8 bytes the
+    # consent page donated (passed through to the page as the same JS object).
     __slots__ = "key", "json_string"
 
     def __init__(self, key, json_string):

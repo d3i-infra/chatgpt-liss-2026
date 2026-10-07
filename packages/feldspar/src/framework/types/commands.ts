@@ -75,9 +75,12 @@ export interface PayloadFiles {
   value: File[]
 }
 
+// `value` is the JSON text as a string, or as UTF-8 bytes (a standalone Uint8Array)
+// when the producer wants it transferred to the worker and passed through Python
+// without conversion (the consent page's donation).
 export interface PayloadJSON {
   __type__: 'PayloadJSON'
-  value: string
+  value: string | Uint8Array
 }
 export function isPayloadJSON (arg: any): arg is PayloadJSON {
   return isInstanceOf<PayloadJSON>(arg, 'PayloadJSON', ['value'])
@@ -145,10 +148,13 @@ export function isCommandSystemLog (arg: any): arg is CommandSystemLog {
   return isInstanceOf<CommandSystemLog>(arg, 'CommandSystemLog', ['level', 'message', 'json_string'])
 }
 
+// json_string is a string on the bridge (the host contract); it arrives from Python as
+// UTF-8 bytes when the donation was passed through untouched, and CommandRouter
+// decodes it before sending.
 export interface CommandSystemDonate {
   __type__: 'CommandSystemDonate'
   key: string
-  json_string: string
+  json_string: string | Uint8Array
 }
 export function isCommandSystemDonate (arg: any): arg is CommandSystemDonate {
   return isInstanceOf<CommandSystemDonate>(arg, 'CommandSystemDonate', ['key', 'json_string'])

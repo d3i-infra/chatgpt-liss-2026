@@ -29,3 +29,37 @@ describe('WorkerProcessingEngine', () => {
     })
   })
 })
+
+// The consent page's donation is UTF-8 bytes; posting the Response moves that buffer
+// to the worker instead of cloning it (the mirror of py_worker.js's transferablesOf).
+// Only the payload's own buffers move: the echoed command may hold buffers the page
+// still reads.
+describe('WorkerProcessingEngine.nextRunCycle', () => {
+  const engine = () => {
+    const worker = { postMessage: jest.fn(), onmessage: null } as any
+    return { worker, engine: new WorkerProcessingEngine('123', 'nl', worker, commandHandler, undefined, 'example') }
+  }
+
+  it('transfers the buffer of a bytes payload', () => {
+    const { worker, engine: e } = engine()
+    const value = new TextEncoder().encode('{"a":1}')
+    const response = { __type__: 'Response', command: { __type__: 'CommandUIRender', page: {} }, payload: { __type__: 'PayloadJSON', value } } as any
+    e.nextRunCycle(response)
+    expect(worker.postMessage).toHaveBeenCalledWith({ eventType: 'nextRunCycle', response }, [value.buffer])
+  })
+
+  it('posts a string payload with nothing to transfer', () => {
+    const { worker, engine: e } = engine()
+    const response = { __type__: 'Response', command: { __type__: 'CommandUIRender', page: {} }, payload: { __type__: 'PayloadJSON', value: '{"a":1}' } } as any
+    e.nextRunCycle(response)
+    expect(worker.postMessage).toHaveBeenCalledWith({ eventType: 'nextRunCycle', response }, [])
+  })
+
+  it('leaves buffers inside the echoed command alone', () => {
+    const { worker, engine: e } = engine()
+    const bytes = new Uint8Array(4)
+    const response = { __type__: 'Response', command: { __type__: 'CommandUIRender', page: { data_frame: bytes } }, payload: { __type__: 'PayloadVoid', value: undefined } } as any
+    e.nextRunCycle(response)
+    expect(worker.postMessage).toHaveBeenCalledWith({ eventType: 'nextRunCycle', response }, [])
+  })
+})

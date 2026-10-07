@@ -18,6 +18,7 @@ import {
 import { useCallback, useEffect, useRef, useState, ReactElement } from "react"
 import _ from "lodash"
 import { TableContainer } from "./table_container"
+import { encodeConsentData } from "./encode_consent_data"
 
 type Props = PropsUIPromptConsentFormViz & ReactFactoryContext
 
@@ -131,8 +132,11 @@ export const ConsentFormViz = (props: Props): ReactElement => {
   }, [])
 
   function handleDonate(): void {
-    const value = serializeConsentData()
-    resolve?.({ __type__: "PayloadJSON", "value": value })
+    // UTF-8 bytes, not the string: the bytes are transferred to the worker and pass
+    // through Python untouched, where a string would be converted twice at a cost of
+    // hundreds of MB (scripts/benchmarks/roundtrip/RESULTS.md). The host still
+    // receives the string; CommandRouter decodes once.
+    resolve?.({ __type__: "PayloadJSON", value: encodeConsentData(serializeConsentData()) })
   }
 
   function handleCancel(): void {

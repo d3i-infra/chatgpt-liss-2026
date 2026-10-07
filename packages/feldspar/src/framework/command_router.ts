@@ -39,11 +39,20 @@ export default class CommandRouter implements CommandHandler {
     }
 
     if (isCommandSystemDonate(command)) {
-      const result = await this.bridge.send(command)
+      // The host contract is a string; a donation that travelled through Python as
+      // UTF-8 bytes is decoded here, once. The Response echoed to the worker keeps
+      // the command's shape without the donation: the worker hands only the payload
+      // to Python, so that copy would never be read.
+      const outgoing = typeof command.json_string === 'string'
+        ? command
+        : { ...command, json_string: new TextDecoder().decode(command.json_string) }
+      const echoed = { ...command, json_string: '' }
+      const result = await this.bridge.send(outgoing)
       if (result !== undefined) {
         console.log('[CommandRouter] Donate result:', result)
-        return { __type__: 'Response', command, payload: { __type__: 'PayloadResponse', value: result } }
+        return { __type__: 'Response', command: echoed, payload: { __type__: 'PayloadResponse', value: result } }
       }
+      return { __type__: 'Response', command: echoed, payload: { __type__: 'PayloadVoid', value: undefined } }
     } else {
       await this.bridge.send(command)
     }

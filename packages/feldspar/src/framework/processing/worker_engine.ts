@@ -116,8 +116,16 @@ export default class WorkerProcessingEngine {
     })
   }
 
+  // A payload carried as a standalone typed array (PayloadJSON bytes from the
+  // consent page) is transferred, not cloned: the mirror of py_worker.js's
+  // transferablesOf. Only the payload's own buffer moves; the echoed command may
+  // hold buffers the page still reads.
   nextRunCycle (response: Response): void {
-    this.worker.postMessage({ eventType: 'nextRunCycle', response })
+    const value = (response.payload as { value?: unknown }).value
+    const transfer = (ArrayBuffer.isView(value) && value.byteOffset === 0 && value.byteLength === value.buffer.byteLength)
+      ? [value.buffer]
+      : []
+    this.worker.postMessage({ eventType: 'nextRunCycle', response }, transfer)
   }
 
   terminate(): void {

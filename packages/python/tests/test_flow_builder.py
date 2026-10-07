@@ -586,3 +586,40 @@ class TestReviewPageReleasesTables:
 
         cmd = advance_past_logs(gen, make_payload("PayloadJSON", value='{"data": "test"}'))
         assert isinstance(cmd, CommandSystemDonate)
+
+
+class BytesProxy:
+    """Stands in for the JsProxy of the Uint8Array the consent page donates: never a
+    str, converted only through to_bytes()."""
+
+    def __init__(self, data: bytes):
+        self._data = data
+        self.to_bytes_calls = 0
+
+    def __len__(self):
+        return len(self._data)
+
+    def to_bytes(self):
+        self.to_bytes_calls += 1
+        return self._data
+
+
+class TestBytesDonation:
+    """The consent-viz page donates UTF-8 bytes (a JsProxy in Pyodide). Without a key
+    the flow passes the object through untouched: Pyodide converts a str both ways at
+    a cost of hundreds of MB, and the bytes need no conversion at all."""
+
+    def _reach_consent(self, flow):
+        gen = flow.start_flow()
+        assert isinstance(start_and_skip_logs(gen), CommandUIRender)
+        assert isinstance(advance_past_logs(gen, make_payload_file()), CommandUIRender)
+        return gen
+
+    def test_plaintext_passes_the_bytes_object_through_untouched(self):
+        flow = StubFlow()
+        gen = self._reach_consent(flow)
+        proxy = BytesProxy(b'{"data": "test"}')
+        cmd = advance_past_logs(gen, make_payload("PayloadJSON", value=proxy))
+        assert isinstance(cmd, CommandSystemDonate)
+        assert cmd.json_string is proxy
+        assert proxy.to_bytes_calls == 0

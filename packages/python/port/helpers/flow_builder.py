@@ -48,6 +48,8 @@ class TaskIncompleteError(Exception):
         self.exit_info = exit_info
 
 
+
+
 class FlowBuilder:
     # Subclasses handling a Google-Takeout-style chunked export set this to
     # "PayloadFiles"; the file prompt, safety check, and archive-set
@@ -263,6 +265,10 @@ class FlowBuilder:
 
         # 9. Donate with per-platform key
         if consent_result.__type__ == "PayloadJSON":
+            # A str, or the JsProxy of the UTF-8 bytes the consent-viz page donates.
+            # The bytes are never converted here: they go back to the page as the
+            # same JS object, and Pyodide's str conversions of a large donation cost
+            # hundreds of MB (data-donation-task scripts/benchmarks/roundtrip/RESULTS.md).
             reviewed_data = consent_result.value
             yield from ph.emit_log("info", f"[{self.platform_name}] Consent: accepted")
         elif consent_result.__type__ == "PayloadFalse":
