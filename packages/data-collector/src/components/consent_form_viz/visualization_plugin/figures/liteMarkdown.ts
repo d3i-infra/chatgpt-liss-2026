@@ -1,7 +1,10 @@
 // A light, deliberately non-exhaustive markdown pass: headings (#, ##, ###),
 // "- " bullet lists, "| a | b |" tables, "> " block quotes, "---" horizontal
-// rules, fenced ``` code blocks, and **bold**/*italic* inline emphasis. It
-// knows nothing about any particular
+// rules, fenced ``` code blocks, `inline code`, **bold**/*italic* inline
+// emphasis, and
+// containers: blocks between a containerOpen line and a containerClose line,
+// nested, so a caller can lay them out (e.g. as a card). It knows nothing
+// about any particular
 // chat platform: callers hand it a list of segments that are either plain
 // text or an opaque "reference" (TRef) - e.g. a citation chip a caller
 // already resolved from its own marker format - and this module keeps those
@@ -19,6 +22,7 @@ export type LiteInlineChild<TRef> =
   | { type: 'text', value: string }
   | { type: 'bold', value: string }
   | { type: 'italic', value: string }
+  | { type: 'code', value: string }
   | { type: 'ref', segment: TRef }
 
 export type LiteBlock<TRef> =
@@ -29,13 +33,32 @@ export type LiteBlock<TRef> =
   | { kind: 'codeBlock', language?: string, code: string }
   | { kind: 'blockquote', lines: Array<Array<LiteInlineChild<TRef>>> }
   | { kind: 'horizontalRule' }
+  // name and attrs are whatever the caller passed to containerOpen.
+  | { kind: 'container', name: string, attrs: Record<string, unknown>, blocks: Array<LiteBlock<TRef>> }
+
+// A container is opened by a line holding only containerOpen(...) and closed
+// by a line holding only CONTAINER_CLOSE. Private-use characters, so they
+// can't occur in ordinary text.
+const CONTAINER_START = '\uE210'
+const CONTAINER_END = '\uE211'
+export const CONTAINER_CLOSE = '\uE212'
+const CONTAINER_OPEN_RE = /^\uE210([\w-]+)(?: (.*))?\uE211[ \t]*$/
+const CONTAINER_CLOSE_RE = /^\uE212[ \t]*$/
+
+export function containerOpen (name: string, attrs: Record<string, unknown> = {}): string {
+  const json = JSON.stringify(attrs).replace(/[\uE210-\uE212]/g, '')
+  return `${CONTAINER_START}${name} ${json}${CONTAINER_END}`
+}
 
 const HEADING_RE = /^(#{1,4})\s+(.*)$/
 const LIST_ITEM_RE = /^-\s+(.*)$/
 const BLOCKQUOTE_RE = /^>\s?(.*)$/
 const HORIZONTAL_RULE_RE = /^-{3,}\s*$/
-const INLINE_RE = /\*\*(.+?)\*\*|\*(.+?)\*/g
-const CODE_FENCE_RE = /^```(\S*)\s*$/
+// Inline code first, so emphasis characters inside it stay as they are.
+const INLINE_RE = /`([^`\n]+)`|\*\*(.+?)\*\*|\*(.+?)\*/g
+// A fence may be indented, e.g. inside a list item or a layout box; its
+// code lines lose the same indentation.
+const CODE_FENCE_RE = /^([ \t]*)```(\S*)\s*$/
 
 export function parseInline<TRef> (text: string): Array<LiteInlineChild<TRef>> {
   const children: Array<LiteInlineChild<TRef>> = []
@@ -48,9 +71,11 @@ export function parseInline<TRef> (text: string): Array<LiteInlineChild<TRef>> {
       children.push({ type: 'text', value: text.slice(lastIndex, match.index) })
     }
     if (match[1] != null) {
-      children.push({ type: 'bold', value: match[1] })
+      children.push({ type: 'code', value: match[1] })
     } else if (match[2] != null) {
-      children.push({ type: 'italic', value: match[2] })
+      children.push({ type: 'bold', value: match[2] })
+    } else if (match[3] != null) {
+      children.push({ type: 'italic', value: match[3] })
     }
     lastIndex = match.index + match[0].length
   }
@@ -124,9 +149,11 @@ function splitChildrenByPipe<TRef> (children: Array<LiteInlineChild<TRef>>): Arr
 }
 
 interface BlockBuilder<TRef> {
-  kind: 'paragraph' | 'heading' | 'listItem' | 'tableRow' | 'tableSeparator' | 'codeFenceOpen' | 'codeFenceClose' | 'codeLine' | 'blockquote' | 'horizontalRule'
+  kind: 'paragraph' | 'heading' | 'listItem' | 'tableRow' | 'tableSeparator' | 'codeFenceOpen' | 'codeFenceClose' | 'codeLine' | 'blockquote' | 'horizontalRule' | 'containerOpen' | 'containerClose'
   level: 1 | 2 | 3 | 4
   language?: string
+  name?: string
+  attrs?: Record<string, unknown>
   children: Array<LiteInlineChild<TRef>>
 }
 
@@ -149,6 +176,8 @@ type RawLine<TRef> =
   | { kind: 'codeLine', text: string }
   | { kind: 'blockquote', children: Array<LiteInlineChild<TRef>> }
   | { kind: 'horizontalRule' }
+  | { kind: 'containerOpen', name: string, attrs: Record<string, unknown> }
+  | { kind: 'containerClose' }
 
 type RawBlock<TRef> =
   | { kind: 'paragraph', children: Array<LiteInlineChild<TRef>> }
@@ -159,6 +188,11 @@ type RawBlock<TRef> =
   | { kind: 'codeBlock', language?: string, code: string }
   | { kind: 'blockquote', children: Array<LiteInlineChild<TRef>> }
   | { kind: 'horizontalRule' }
+  | { kind: 'containerOpen', name: string, attrs: Record<string, unknown> }
+  | { kind: 'containerClose' }
+
+// Blocks before containers are nested (see nestContainers).
+type FlatBlock<TRef> = Exclude<LiteBlock<TRef>, { kind: 'container' }> | { kind: 'containerOpen', name: string, attrs: Record<string, unknown> } | { kind: 'containerClose' }
 
 function toRawBlock<TRef> (b: BlockBuilder<TRef>): RawLine<TRef> {
   if (b.kind === 'heading') return { kind: 'heading', level: b.level, children: b.children }
@@ -170,6 +204,8 @@ function toRawBlock<TRef> (b: BlockBuilder<TRef>): RawLine<TRef> {
   if (b.kind === 'codeLine') return { kind: 'codeLine', text: b.children.map(c => c.type === 'text' ? c.value : '').join('') }
   if (b.kind === 'blockquote') return { kind: 'blockquote', children: b.children }
   if (b.kind === 'horizontalRule') return { kind: 'horizontalRule' }
+  if (b.kind === 'containerOpen') return { kind: 'containerOpen', name: b.name ?? '', attrs: b.attrs ?? {} }
+  if (b.kind === 'containerClose') return { kind: 'containerClose' }
   return { kind: 'paragraph', children: b.children }
 }
 
@@ -178,6 +214,7 @@ function buildRawBlocks<TRef> (segments: Array<InputSegment<TRef>>): Array<RawLi
   let current = newBuilder<TRef>()
   let atLineStart = true
   let inCodeBlock = false
+  let fenceIndent = 0
 
   const flush = (): void => {
     blocks.push(toRawBlock(current))
@@ -209,7 +246,8 @@ function buildRawBlocks<TRef> (segments: Array<InputSegment<TRef>>): Array<RawLi
             inCodeBlock = false
           } else {
             current.kind = 'codeFenceOpen'
-            current.language = fenceMatch[1] !== '' ? fenceMatch[1] : undefined
+            current.language = fenceMatch[2] !== '' ? fenceMatch[2] : undefined
+            fenceIndent = fenceMatch[1].length
             inCodeBlock = true
           }
           content = ''
@@ -217,7 +255,23 @@ function buildRawBlocks<TRef> (segments: Array<InputSegment<TRef>>): Array<RawLi
         } else if (inCodeBlock) {
           // Raw code content: no heading/table/list/inline-emphasis parsing.
           current.kind = 'codeLine'
-          current.children.push({ type: 'text', value: content })
+          current.children.push({ type: 'text', value: content.replace(new RegExp(`^[ \\t]{0,${fenceIndent}}`), '') })
+          content = ''
+          atLineStart = false
+        } else if (CONTAINER_OPEN_RE.test(content)) {
+          const [, name, json] = CONTAINER_OPEN_RE.exec(content) as RegExpExecArray
+          current.kind = 'containerOpen'
+          current.name = name
+          try {
+            const parsed: unknown = JSON.parse(json ?? '{}')
+            current.attrs = parsed != null && typeof parsed === 'object' ? parsed as Record<string, unknown> : {}
+          } catch {
+            current.attrs = {}
+          }
+          content = ''
+          atLineStart = false
+        } else if (CONTAINER_CLOSE_RE.test(content)) {
+          current.kind = 'containerClose'
           content = ''
           atLineStart = false
         } else if (content.length > 0) {
@@ -298,7 +352,7 @@ function groupCodeBlocks<TRef> (lines: Array<RawLine<TRef>>): Array<RawBlock<TRe
   return result
 }
 
-function flattenRowToParagraph<TRef> (cells: Array<Array<LiteInlineChild<TRef>>>): LiteBlock<TRef> {
+function flattenRowToParagraph<TRef> (cells: Array<Array<LiteInlineChild<TRef>>>): FlatBlock<TRef> {
   const children: Array<LiteInlineChild<TRef>> = []
   cells.forEach((cell, i) => {
     if (i > 0) children.push({ type: 'text', value: ' | ' })
@@ -310,8 +364,8 @@ function flattenRowToParagraph<TRef> (cells: Array<Array<LiteInlineChild<TRef>>>
 // A tableRow only becomes a real table once immediately followed by a
 // tableSeparator; otherwise it's a stray "|"-containing line rendered as
 // plain text.
-function groupTables<TRef> (blocks: Array<RawBlock<TRef>>): Array<LiteBlock<TRef>> {
-  const result: Array<LiteBlock<TRef>> = []
+function groupTables<TRef> (blocks: Array<RawBlock<TRef>>): Array<FlatBlock<TRef>> {
+  const result: Array<FlatBlock<TRef>> = []
   let i = 0
 
   while (i < blocks.length) {
@@ -376,6 +430,49 @@ function groupTables<TRef> (blocks: Array<RawBlock<TRef>>): Array<LiteBlock<TRef
   return result
 }
 
+// Nests the blocks between each containerOpen and its containerClose. A
+// close without an open is dropped and an unclosed container ends with the
+// message, so unbalanced markup still shows all its content.
+function nestContainers<TRef> (blocks: Array<FlatBlock<TRef>>): Array<LiteBlock<TRef>> {
+  const root: Array<LiteBlock<TRef>> = []
+  const stack: Array<Extract<LiteBlock<TRef>, { kind: 'container' }>> = []
+  for (const block of blocks) {
+    const into = stack.length > 0 ? stack[stack.length - 1].blocks : root
+    if (block.kind === 'containerOpen') {
+      const container: Extract<LiteBlock<TRef>, { kind: 'container' }> = { kind: 'container', name: block.name, attrs: block.attrs, blocks: [] }
+      into.push(container)
+      stack.push(container)
+    } else if (block.kind === 'containerClose') {
+      stack.pop()
+    } else {
+      into.push(block)
+    }
+  }
+  return root
+}
+
 export function buildLiteBlocks<TRef> (segments: Array<InputSegment<TRef>>): Array<LiteBlock<TRef>> {
-  return groupTables(groupCodeBlocks(buildRawBlocks(segments)))
+  return nestContainers(groupTables(groupCodeBlocks(buildRawBlocks(segments))))
+}
+
+// Display formulas, written in LaTeX between "\[" and "\]" or "$$" and "$$"
+// on lines of their own. There's no formula rendering here, so they're
+// shown as a code block, which at least keeps their layout. Inline
+// formulas and single "$" are left alone, as "$" is far more often money.
+const DISPLAY_FORMULA_RE = /^[ \t]*(?:\\\[([\s\S]+?)\\\]|\$\$([\s\S]+?)\$\$)[ \t]*$/gm
+// Fenced code blocks, which are left untouched.
+const FENCED_CODE_RE = /^[ \t]*```[^\n]*\n[\s\S]*?^[ \t]*```[ \t]*$/gm
+
+export function formulasToCode (message: string): string {
+  const toCode = (text: string): string => text.replace(DISPLAY_FORMULA_RE, (_, bracketed?: string, dollars?: string) =>
+    `\`\`\`\n${(bracketed ?? dollars ?? '').trim()}\n\`\`\``)
+  let out = ''
+  let lastIndex = 0
+  FENCED_CODE_RE.lastIndex = 0
+  let match: RegExpExecArray | null
+  while ((match = FENCED_CODE_RE.exec(message)) !== null) {
+    out += toCode(message.slice(lastIndex, match.index)) + match[0]
+    lastIndex = match.index + match[0].length
+  }
+  return out + toCode(message.slice(lastIndex))
 }

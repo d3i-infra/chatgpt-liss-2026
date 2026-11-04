@@ -1,5 +1,6 @@
 import { resolveMessageReferences } from './chat_conversation'
-import { ContentReference } from '../types'
+import { groupAnswerParts } from './answerParts'
+import { ContentReference, ConversationMessage } from '../types'
 
 const cite = (...tokens: string[]): string => `cite${tokens.map(t => `${t}`).join('')}`
 
@@ -56,5 +57,68 @@ describe('resolveMessageReferences cite markers', () => {
   it('keeps a marker unresolved when no entry covers all its tokens', () => {
     const message = cite('turn777777view9')
     expect(citedTitles(message, [webpage('A', [[1, 'view', 2]])])).toEqual([undefined])
+  })
+})
+
+describe('resolveMessageReferences layout images', () => {
+  it('shows a gpt-6 AsyncImage as a placeholder with its search phrase', () => {
+    const segments = resolveMessageReferences(`a layout_imageShelly Pro 4PM`, [])
+    expect(segments[1]).toEqual({ kind: 'ref', segment: { kind: 'imagePlaceholder', query: 'Shelly Pro 4PM' } })
+  })
+})
+
+describe('resolveMessageReferences layout icons', () => {
+  it('shows a gpt-6 icon by its name, size and color', () => {
+    expect(resolveMessageReferences('\uE200icon\uE202cpu\uE202xl\uE202success\uE201', [])[0])
+      .toEqual({ kind: 'ref', segment: { kind: 'layoutIcon', name: 'cpu', size: 'xl', color: 'success' } })
+    expect(resolveMessageReferences('\uE200icon\uE202wifi\uE202\uE202\uE201', [])[0])
+      .toEqual({ kind: 'ref', segment: { kind: 'layoutIcon', name: 'wifi', size: undefined, color: undefined } })
+  })
+})
+
+describe('resolveMessageReferences layout badges', () => {
+  it('shows a gpt-6 badge with its text and color', () => {
+    expect(resolveMessageReferences('\uE200badge\uE202Zeer goed\uE202success\uE201', [])[0])
+      .toEqual({ kind: 'ref', segment: { kind: 'layoutBadge', text: 'Zeer goed', color: 'success' } })
+  })
+})
+
+describe('resolveMessageReferences gpt-6 citations', () => {
+  const sources = [{ domain: 'a.example', entries: [{ url: 'https://a.example/1', title: 'A' }] }]
+
+  it("opens the answer's sources, saying how many sources it cites", () => {
+    const segments = resolveMessageReferences(`a ${cite('turn1search0', 'turn1search9')}`, [], { hiddenSlots: false, answerSources: sources })
+    expect(segments[1]).toEqual({ kind: 'ref', segment: { kind: 'answerSourcesCitation', count: 2, sources } })
+  })
+
+  it('ignores content_references "hidden" slots when asked', () => {
+    const hidden = [{ type: 'hidden' }] as unknown as ContentReference[]
+    const kindOf = (opts?: { hiddenSlots?: boolean, answerSources?: typeof sources }): string | undefined => {
+      const ref = resolveMessageReferences(`a ${cite('turn0search0')}`, hidden, opts).find(s => s.kind === 'ref')
+      return ref?.kind === 'ref' ? ref.segment.kind : undefined
+    }
+    expect(kindOf()).toBe('hidden')
+    expect(kindOf({ hiddenSlots: false, answerSources: sources })).toBe('answerSourcesCitation')
+  })
+})
+
+describe('groupAnswerParts', () => {
+  const msg = (id: string, role: string, reactionTo?: string, extra: Partial<ConversationMessage> = {}): ConversationMessage =>
+    ({ id, messageId: id, role, reactionTo, message: id, ...extra })
+
+  it('groups assistant messages that continue one another', () => {
+    const messages = [msg('u1', 'user'), msg('a1', 'assistant', 'u1'), msg('a2', 'assistant', 'a1'), msg('a3', 'assistant', 'a2'), msg('u2', 'user', 'a3')]
+    expect(groupAnswerParts(messages, m => m.contentType === 'thoughts').map(g => g.map(m => m.id))).toEqual([['u1'], ['a1', 'a2', 'a3'], ['u2']])
+  })
+
+  it('keeps regenerated replies, removed parts and labelled content apart', () => {
+    const messages = [
+      msg('u1', 'user'),
+      msg('t1', 'assistant', 'u1', { contentType: 'thoughts' }),
+      msg('a1', 'assistant', 't1'),
+      msg('a2', 'assistant', 'a1', { removed: true }),
+      msg('b1', 'assistant', 'u1', { hidden: true }),
+    ]
+    expect(groupAnswerParts(messages, m => m.contentType === 'thoughts').map(g => g.map(m => m.id))).toEqual([['u1'], ['t1'], ['a1'], ['a2'], ['b1']])
   })
 })

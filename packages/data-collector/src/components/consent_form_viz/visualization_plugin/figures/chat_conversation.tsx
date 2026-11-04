@@ -22,8 +22,11 @@ import {
 import { formatShortDate } from '../visualizationDataFunctions/util'
 import { resolveAllFlat as getTranslations } from '../../../../locale/text'
 import { matchesQuery, queryTerms } from '../searchMatch'
-import { buildLiteBlocks, InputSegment, LiteBlock, LiteInlineChild } from './liteMarkdown'
-import { genuiToMarkdown } from './genuiMarkup'
+import { buildLiteBlocks, formulasToCode, InputSegment, LiteBlock, LiteInlineChild } from './liteMarkdown'
+import { genuiToMarkdown, isLayoutGenuiMarkup } from './genuiMarkup'
+import { answerSources, groupAnswerParts } from './answerParts'
+import { badgeClassName, containerStyle } from './layoutStyles'
+import { LayoutIcon } from './layout_icon'
 import RemoveSvg from '../../assets/images/remove.svg'
 import UndoSvg from '../../assets/images/undo.svg'
 import BackSvg from '../../assets/images/back.svg'
@@ -167,7 +170,9 @@ type Screen =
   // title (sourceDataMsg/referenceDataMsg) by renderScreenPanel/
   // renderExtraPanel so a details screen in particular - reachable from
   // several different chip kinds - says which one it came from.
-  | { kind: 'sources', sources: SearchResultGroup[], parentLabel: string }
+  // citationNotice: opened from a gpt-6 citation pill, so the list comes with
+  // the explanation of why it isn't that citation's own source.
+  | { kind: 'sources', sources: SearchResultGroup[], parentLabel: string, citationNotice?: boolean }
   | { kind: 'details', data: unknown, parentLabel: string }
 
 // Explanation shown in the help overlay of this visualization (see the help
@@ -218,9 +223,9 @@ export default function ChatConversation ({ visualizationData, locale, search, h
   // it as a removed-placeholder from the pristine rows so it can be restored.
   // The removed id is recorded first so the layout effect below keeps the
   // panel anchored once the shrunken placeholder re-renders.
-  function removeMessage (id: string): void {
-    pendingRemovedIdRef.current = id
-    handleDelete([id])
+  function removeMessage (ids: string[]): void {
+    pendingRemovedIdRef.current = ids[0]
+    handleDelete(ids)
   }
 
   // A no-op at the base 'messages' screen (depth 1) rather than clearing the
@@ -430,7 +435,17 @@ export default function ChatConversation ({ visualizationData, locale, search, h
         ? <div className='m-auto text-grey2'>{selectMsg}</div>
         : selectedConversation.messages.length === 0
           ? <div className='m-auto text-grey2'>{noDataMsg}</div>
-          : selectedConversation.messages.map(msg => {
+          : groupAnswerParts(selectedConversation.messages, msg => isLabelledContentType(msg.contentType)).map(parts => {
+              // One bubble per answer: the parts the export splits an answer
+              // into (see groupAnswerParts) share it, and are removed and
+              // restored together. Their state is the same, so the first
+              // part stands for all of them.
+              const msg = parts[0]
+              const ids = parts.map(part => part.id)
+              const lastWithText = [...parts].reverse().find(part => part.message.trim() !== '') ?? parts[parts.length - 1]
+              const shownParts = parts.length > 1 ? parts.filter(part => part.message.trim() !== '') : parts
+              const sources = answerSources(parts)
+              const references = parts.some(part => part.references != null) ? parts.flatMap(part => part.references ?? []) : undefined
               const isUser = msg.role === 'user'
               // A removed message's row has been deleted from the donated
               // table; prepareConversationData still surfaces it here (from
@@ -448,9 +463,9 @@ export default function ChatConversation ({ visualizationData, locale, search, h
               // which a fieldset's legend gives natively. When a message is
               // both, the hidden look wins and the legend carries both labels.
               const Bubble = isHidden || contentType != null ? 'fieldset' : 'div'
-              const messageSources = msg.sources?.flatMap(group => group.entries ?? group.items ?? []) ?? []
-              const sourcesMatched = matchesQuery(msg.sources, query)
-              const detailsMatched = matchesQuery(msg.references, query)
+              const messageSources = sources?.flatMap(group => group.entries ?? group.items ?? []) ?? []
+              const sourcesMatched = matchesQuery(sources, query)
+              const detailsMatched = matchesQuery(references, query)
               return (
                 <div
                   key={msg.id}
@@ -483,26 +498,31 @@ export default function ChatConversation ({ visualizationData, locale, search, h
                     )}
                     {isRemoved
                       ? removedPlaceholderMsg
-                      : (
+                      : shownParts.map(part => (
                         <MessageContent
-                          message={msg.message}
-                          references={msg.references}
+                          key={part.id}
+                          message={part.message}
+                          references={part.references}
+                          model={part.model ?? undefined}
+                          answerSources={sources ?? []}
                           locale={locale}
                           searchQuery={query}
-                          onShowRaw={(data, parentLabel) => pushScreen({ kind: 'details', data, parentLabel })}
+                          onShowRaw={(data, parentLabel, asCitationSources) => pushScreen(asCitationSources === true
+                            ? { kind: 'sources', sources: data as SearchResultGroup[], parentLabel, citationNotice: true }
+                            : { kind: 'details', data, parentLabel })}
                         />
-                        )}
+                      ))}
                   </Bubble>
                   <div className='flex items-start gap-2 mt-0.5 px-1'>
                     <span className="text-xs italic text-grey2">
                       {!isUser && isRemoved && assistantMsg}
 
                       {!isUser && !isRemoved &&
-                        msg.model != null &&
-                        msg.model !== "" &&
+                        lastWithText.model != null &&
+                        lastWithText.model !== "" &&
                         (!isPhoneLayout
-                          ? `${assistantMsg} (${msg.model})`
-                          : msg.model)}
+                          ? `${assistantMsg} (${lastWithText.model})`
+                          : lastWithText.model)}
 
                       {isUser && youMsg}
 
@@ -518,7 +538,7 @@ export default function ChatConversation ({ visualizationData, locale, search, h
                     </span>
                     {!isRemoved && messageSources.length > 0 && (
                       <button
-                        onClick={() => pushScreen({ kind: 'sources', sources: msg.sources ?? [], parentLabel: `${messageLabel} ${msg.id}` })}
+                        onClick={() => pushScreen({ kind: 'sources', sources: sources ?? [], parentLabel: `${messageLabel} ${msg.id}` })}
                         className={sourcesMatched ? sourcesPillMatched : sourcesPill}
                         title={sourcesMsg}
                       >
@@ -526,9 +546,9 @@ export default function ChatConversation ({ visualizationData, locale, search, h
                         {sourcesMsg}
                       </button>
                     )}
-                    {!isRemoved && msg.references != null && msg.references.length > 0 && (
+                    {!isRemoved && references != null && references.length > 0 && (
                       <button
-                        onClick={() => pushScreen({ kind: 'details', data: msg.references ?? [], parentLabel: `${messageLabel} ${msg.id}` })}
+                        onClick={() => pushScreen({ kind: 'details', data: references, parentLabel: `${messageLabel} ${msg.id}` })}
                         className={detailsMatched ? sourcesPillMatched : sourcesPill}
                         title={detailsMsg}
                       >
@@ -537,7 +557,7 @@ export default function ChatConversation ({ visualizationData, locale, search, h
                     )}
                     {!isRemoved ? (
                       <button
-                        onClick={() => removeMessage(msg.id)}
+                        onClick={() => removeMessage(ids)}
                         className={removePill}
                         title={removeMsg}
                       >
@@ -545,7 +565,7 @@ export default function ChatConversation ({ visualizationData, locale, search, h
                       </button>
                     ) : (
                       <button
-                        onClick={() => handleRestore([msg.id])}
+                        onClick={() => handleRestore(ids)}
                         className={restorePill}
                         title={restoreMsg}
                       >
@@ -643,7 +663,7 @@ export default function ChatConversation ({ visualizationData, locale, search, h
           </div>
         )}
         {currentScreen.kind === 'messages' && messagesScreenBody}
-        {currentScreen.kind === 'sources' && <SourcesScreen sources={currentScreen.sources} locale={locale} searchQuery={query} />}
+        {currentScreen.kind === 'sources' && <SourcesScreen sources={currentScreen.sources} citationNotice={currentScreen.citationNotice} locale={locale} searchQuery={query} />}
         {currentScreen.kind === 'details' && <DetailsScreen data={currentScreen.data} searchQuery={query} />}
       </>
     )
@@ -660,7 +680,7 @@ export default function ChatConversation ({ visualizationData, locale, search, h
           <span className='text-sm font-bold truncate flex-1'>{screenTitle(currentScreen)}</span>
           <button onClick={closeExtraPanel} className='shrink-0 text-grey2 hover:text-black text-2xl leading-none px-1 cursor-pointer'>&times;</button>
         </div>
-        {currentScreen.kind === 'sources' && <SourcesScreen sources={currentScreen.sources} locale={locale} searchQuery={query} />}
+        {currentScreen.kind === 'sources' && <SourcesScreen sources={currentScreen.sources} citationNotice={currentScreen.citationNotice} locale={locale} searchQuery={query} />}
         {currentScreen.kind === 'details' && <DetailsScreen data={currentScreen.data} searchQuery={query} />}
       </>
     )
@@ -724,11 +744,20 @@ type ReferenceSegment =
   | { kind: 'url', text: string, href?: string }
   | { kind: 'video', text: string, href?: string }
   | { kind: 'citation', sources: CitationSource[] }
+  // A gpt-6 citation: its export doesn't say which source each citation
+  // refers to, only which sources the answer used (see resolveCitation). So
+  // it shows how many sources it cites, and opens the answer's sources.
+  | { kind: 'answerSourcesCitation', count: number, sources: SearchResultGroup[] }
   | { kind: 'map', places: MapPlace[], raw: unknown }
   // The marker's title isn't shown by ChatGPT; kept as the row's accessible name.
   | { kind: 'navlist', title?: string, articles: NewsArticle[] }
   | { kind: 'products', products: ProductItem[] }
   | { kind: 'images', count: number, raw: unknown }
+  // A gpt-6 <AsyncImage>: the export keeps only the phrase ChatGPT searched
+  // the image with, so that is what is shown in its place.
+  | { kind: 'imagePlaceholder', query: string }
+  | { kind: 'layoutIcon', name: string, size?: string, color?: string }
+  | { kind: 'layoutBadge', text: string, color?: string }
   | { kind: 'widget', name: string, raw: unknown }
   // A marker ChatGPT itself doesn't show (its content_references slot is
   // "hidden" - see hiddenMarkerIndices). Still rendered, since participants
@@ -744,26 +773,44 @@ type ReferenceSegment =
 
 type MessageSegment = InputSegment<ReferenceSegment>
 
+// Pushes a 'details' screen (see Screen/renderScreenPanel in
+// ChatConversation) showing this raw data - replaces what used to be a
+// ReferenceDataPopup owned locally by this component. parentLabel
+// identifies which chip triggered it (e.g. "Widget: world_cup_standings"),
+// shown in that screen's header alongside its generic title. With
+// asCitationSources, the data is a gpt-6 citation's answer sources,
+// shown as a 'sources' screen with its explanation instead.
+type ShowRaw = (data: unknown, parentLabel: string, asCitationSources?: boolean) => void
+
 interface MessageContentProps {
   message: string
   references: ContentReference[] | undefined
+  // The model slug, if known: older models never use the gpt-6 layout
+  // dialect, so their messages aren't converted as such.
+  model?: string
+  // The search results and earlier chats of the answer this message is part
+  // of, which its gpt-6 citations open.
+  answerSources?: SearchResultGroup[]
   locale: string
   searchQuery?: string
-  // Pushes a 'details' screen (see Screen/renderScreenPanel in
-  // ChatConversation) showing this raw data - replaces what used to be a
-  // ReferenceDataPopup owned locally by this component. parentLabel
-  // identifies which chip triggered it (e.g. "Widget: world_cup_standings"),
-  // shown in that screen's header alongside its generic title.
-  onShowRaw: (data: unknown, parentLabel: string) => void
+  onShowRaw: ShowRaw
 }
 
 interface Labels {
   imagesLabel: string
+  imageLabel: string
+  imagePlaceholderTitle: string
+  imagesHelp: string
+  mapHelp: string
+  widgetHelp: string
   widgetLabel: string
   mapLabel: string
   unknownLabel: string
   entityLabel: string
   productLabel: string
+  sourceLabel: string
+  sourcesLabel: string
+  answerSourcesTitle: string
   hiddenLabel: string
   hiddenTitle: string
   // Not a label, but carried along with them for references that format
@@ -778,17 +825,46 @@ const clickableRef = 'cursor-pointer hover:ring-2 hover:ring-primary/40'
 // search query matches somewhere in its underlying structured data.
 const matchedRef = 'ring-2 ring-tertiary bg-tertiary/40'
 
-function MessageContent ({ message, references, locale, searchQuery = '', onShowRaw }: MessageContentProps) {
-  const segments = resolveMessageReferences(genuiToMarkdown(message), references)
+function MessageContent ({ message, references, model, answerSources, locale, searchQuery = '', onShowRaw }: MessageContentProps) {
+  // The gpt-6 layout dialect's references don't take content_references
+  // slots, so its "hidden" entries can't be mapped onto them.
+  const isLayout = isLayoutGenuiMarkup(message, model)
+  const segments = resolveMessageReferences(formulasToCode(genuiToMarkdown(message, model)), references, {
+    hiddenSlots: !isLayout,
+    answerSources: isLayout ? answerSources ?? [] : undefined,
+  })
   const blocks = buildLiteBlocks(segments)
   const query = searchQuery.trim()
   const translations = getTranslations({
     imagesLabel: { en: 'Images', nl: 'Afbeeldingen' },
+    imageLabel: { en: 'Image', nl: 'Afbeelding' },
+    imagePlaceholderTitle: {
+      en: 'ChatGPT showed an image here. No image is shown, because only text can be donated: what you donate is the search phrase ChatGPT used to find the image, shown here.',
+      nl: 'ChatGPT toonde hier een afbeelding. Er wordt geen afbeelding getoond, omdat alleen tekst gedoneerd kan worden: wat je doneert is de zoekterm waarmee ChatGPT de afbeelding vond, hier weergegeven.',
+    },
+    imagesHelp: {
+      en: 'ChatGPT showed images here. No images are shown, because only text can be donated. Click to see the text about these images that you donate.',
+      nl: 'ChatGPT toonde hier afbeeldingen. Er worden geen afbeeldingen getoond, omdat alleen tekst gedoneerd kan worden. Klik om de tekst over deze afbeeldingen te zien die je doneert.',
+    },
+    mapHelp: {
+      en: 'ChatGPT showed a map here. No map is shown, because only text can be donated: what you donate are the places listed here. Click to see all their details.',
+      nl: 'ChatGPT toonde hier een kaart. Er wordt geen kaart getoond, omdat alleen tekst gedoneerd kan worden: wat je doneert zijn de plaatsen die hier staan. Klik om al hun gegevens te zien.',
+    },
+    widgetHelp: {
+      en: 'ChatGPT showed an interactive element here, such as a chart. It is not shown, because only text can be donated. Click to see the text behind it that you donate.',
+      nl: 'ChatGPT toonde hier een interactief element, zoals een grafiek. Dit wordt niet getoond, omdat alleen tekst gedoneerd kan worden. Klik om de tekst erachter te zien die je doneert.',
+    },
     widgetLabel: { en: 'Widget', nl: 'Widget' },
     mapLabel: { en: 'Map', nl: 'Kaart' },
     unknownLabel: { en: 'Unknown', nl: 'Onbekend' },
     entityLabel: { en: 'Entity', nl: 'Entiteit' },
     productLabel: { en: 'Product', nl: 'Product' },
+    sourceLabel: { en: 'source', nl: 'bron' },
+    sourcesLabel: { en: 'sources', nl: 'bronnen' },
+    answerSourcesTitle: {
+      en: 'Show the sources ChatGPT used for this answer',
+      nl: 'Toon de bronnen die ChatGPT voor dit antwoord gebruikte',
+    },
     hiddenLabel: { en: 'Hidden', nl: 'Verborgen' },
     hiddenTitle: {
       en: 'This item is present in your chat data, but ChatGPT did not show it to you in the original conversation.',
@@ -797,7 +873,19 @@ function MessageContent ({ message, references, locale, searchQuery = '', onShow
   }, locale) as unknown as Omit<Labels, 'locale'>
   const labels: Labels = { ...translations, locale }
 
-  const elements: Array<ReturnType<typeof renderBlock>> = []
+  return <>{renderBlocks(blocks, labels, query, onShowRaw)}</>
+}
+
+// Renders a list of blocks, grouping consecutive list items into one list.
+// A container (the gpt-6 layout dialect's boxes, rows, grids and styled text
+// - see layoutStyles) renders its own blocks inside it; there, empty lines
+// are left out, as the container's gap already spaces its content. In a
+// row, content that isn't a container itself (e.g. an image placeholder
+// beside a product's details) is kept narrow, as ChatGPT gives it a small
+// fixed width, so the row's boxes get the rest.
+function renderBlocks (blocks: Array<LiteBlock<ReferenceSegment>>, labels: Labels, query: string, onShowRaw: ShowRaw, parent?: string): ReactNode[] {
+  const inContainer = parent != null
+  const elements: ReactNode[] = []
   let listBuffer: Array<{ children: Array<LiteInlineChild<ReferenceSegment>> }> = []
 
   const flushList = (key: string): void => {
@@ -818,14 +906,22 @@ function MessageContent ({ message, references, locale, searchQuery = '', onShow
       return
     }
     flushList(`list-${i}`)
-    elements.push(<Fragment key={i}>{renderBlock(block, labels, query, onShowRaw)}</Fragment>)
+    if (block.kind === 'container') {
+      const { className, style } = containerStyle(block.name, block.attrs)
+      elements.push(<div key={i} className={className} style={style}>{renderBlocks(block.blocks, labels, query, onShowRaw, block.name)}</div>)
+      return
+    }
+    if (inContainer && block.kind === 'paragraph' && block.children.every(c => c.type === 'text' && c.value.trim() === '')) return
+    elements.push(parent === 'row'
+      ? <div key={i} className='min-w-0 max-w-[35%] shrink-0'>{renderBlock(block, labels, query, onShowRaw)}</div>
+      : <Fragment key={i}>{renderBlock(block, labels, query, onShowRaw)}</Fragment>)
   })
   flushList('list-end')
 
-  return <>{elements}</>
+  return elements
 }
 
-function renderBlock (block: LiteBlock<ReferenceSegment>, labels: Labels, query: string, onShowRaw: (data: unknown, parentLabel: string) => void) {
+function renderBlock (block: LiteBlock<ReferenceSegment>, labels: Labels, query: string, onShowRaw: ShowRaw) {
   switch (block.kind) {
     case 'heading': {
       const headingClass = block.level === 1 ? 'text-xl font-bold' : block.level === 2 ? 'text-lg font-bold' : block.level === 3 ? 'text-base font-semibold' : 'text-sm font-bold'
@@ -911,7 +1007,7 @@ function renderBlock (block: LiteBlock<ReferenceSegment>, labels: Labels, query:
   }
 }
 
-function renderInline (child: LiteInlineChild<ReferenceSegment>, labels: Labels, query: string, onShowRaw: (data: unknown, parentLabel: string) => void) {
+function renderInline (child: LiteInlineChild<ReferenceSegment>, labels: Labels, query: string, onShowRaw: ShowRaw) {
   switch (child.type) {
     case 'text':
       return highlight(child.value, query)
@@ -919,6 +1015,8 @@ function renderInline (child: LiteInlineChild<ReferenceSegment>, labels: Labels,
       return <span className='font-semibold'>{highlight(child.value, query)}</span>
     case 'italic':
       return <em>{highlight(child.value, query)}</em>
+    case 'code':
+      return <code className='rounded bg-grey6 border border-grey4 px-1 font-mono text-[0.9em]'>{highlight(child.value, query)}</code>
     case 'ref':
       return renderReference(child.segment, labels, query, onShowRaw)
     default:
@@ -926,8 +1024,8 @@ function renderInline (child: LiteInlineChild<ReferenceSegment>, labels: Labels,
   }
 }
 
-function renderReference (segment: ReferenceSegment, labels: Labels, query: string, onShowRaw: (data: unknown, parentLabel: string) => void) {
-  const { imagesLabel, widgetLabel, mapLabel, unknownLabel, entityLabel, productLabel, hiddenLabel, hiddenTitle } = labels
+function renderReference (segment: ReferenceSegment, labels: Labels, query: string, onShowRaw: ShowRaw) {
+  const { imagesLabel, imageLabel, imagePlaceholderTitle, imagesHelp, mapHelp, widgetHelp, widgetLabel, mapLabel, unknownLabel, entityLabel, productLabel, sourceLabel, sourcesLabel, answerSourcesTitle, hiddenLabel, hiddenTitle } = labels
   switch (segment.kind) {
     case 'hidden': {
       // Same look as a hidden message: a dashed box with the "Hidden" label
@@ -941,7 +1039,7 @@ function renderReference (segment: ReferenceSegment, labels: Labels, query: stri
       const isBlock = inner === 'map' || inner === 'navlist' || inner === 'products'
       const layout = isBlock
         ? 'block my-1 px-1'
-        : inner === 'url' || inner === 'video' || inner === 'citation' || inner === 'entity'
+        : inner === 'url' || inner === 'video' || inner === 'citation' || inner === 'answerSourcesCitation' || inner === 'entity'
           ? 'inline-block align-baseline max-w-full px-0.5'
           : 'inline-block align-middle max-w-full px-0.5'
       return (
@@ -999,6 +1097,26 @@ function renderReference (segment: ReferenceSegment, labels: Labels, query: stri
         </span>
       )
 
+    case 'answerSourcesCitation': {
+      // Shaped like a CitationPill, but it says how many sources it cites
+      // instead of naming one, and opens the answer's sources with an
+      // explanation of why (see SourcesScreen's citationNotice).
+      const label = `${segment.count} ${segment.count === 1 ? sourceLabel : sourcesLabel}`
+      return (
+        <span className='inline-flex gap-0.5 align-super text-[0.65rem]'>
+          <button
+            type='button'
+            onClick={() => onShowRaw(segment.sources, label, true)}
+            title={answerSourcesTitle}
+            className='inline-flex items-center justify-center min-w-[1.1rem] h-[1.1rem] px-1 rounded-full bg-grey4 text-primary font-semibold cursor-pointer hover:bg-primary hover:text-white group'
+          >
+            <img src={LinkSvg} className='w-3 h-3 pr-0.5 group-hover:brightness-0 group-hover:invert' />
+            <span className='ml-0.5 text-[0.60rem]'>{label}</span>
+          </button>
+        </span>
+      )
+    }
+
     case 'map':
       return (
         <span
@@ -1008,6 +1126,7 @@ function renderReference (segment: ReferenceSegment, labels: Labels, query: stri
           <div className='flex items-center gap-1 mb-1'>
             <img src={MapSvg} className='w-5 h-5' />
             <span className='font-bold text-sm'>{mapLabel}</span>
+            <HelpButton explanation={mapHelp} />
           </div>
           {segment.places.map((place, i) => (
             <span key={i} className='block'>
@@ -1035,8 +1154,16 @@ function renderReference (segment: ReferenceSegment, labels: Labels, query: stri
           <span className='text-sm text-black'>
             {segment.count} {imagesLabel}
           </span>
+          <HelpButton explanation={imagesHelp} />
         </div>
       )
+
+    case 'layoutBadge':
+      return <span className={`inline-block align-middle ${badgeClassName(segment.color)}`}>{highlight(segment.text, query)}</span>
+    case 'layoutIcon':
+      return <LayoutIcon name={segment.name} size={segment.size} color={segment.color} />
+    case 'imagePlaceholder':
+      return <ImagePlaceholder query={segment.query} label={imageLabel} explanation={imagePlaceholderTitle} matched={matchesQuery(segment.query, query)} />
 
     case 'widget':
       return (
@@ -1048,6 +1175,7 @@ function renderReference (segment: ReferenceSegment, labels: Labels, query: stri
           <span className='text-sm text-black'>
             {widgetLabel}: {segment.name}
           </span>
+          <HelpButton explanation={widgetHelp} />
         </div>
       )
 
@@ -1290,6 +1418,46 @@ function BorderLabel ({ label, explanation, colorClass = 'text-warningdark' }: {
   )
 }
 
+// A help icon that opens a popover with an explanation, e.g. why a visual
+// element (image, map, widget) isn't shown. Clicks on it and on its popover
+// stop here - React events bubble through the portal - so a clickable chip
+// it sits in doesn't also open its raw data.
+function HelpButton ({ explanation }: { explanation: string }): JSX.Element {
+  const { wrapperRef, open, openTooltip, closeTooltip, tooltipPortal } = useAnchoredPopover(
+    <span className='block p-1.5 text-xs text-black whitespace-normal'>{explanation}</span>,
+    { openOnClick: true, widthClass: 'w-64' }
+  )
+
+  return (
+    <span ref={wrapperRef} onClick={e => e.stopPropagation()} className='inline-flex shrink-0 ml-1'>
+      <button
+        type='button'
+        aria-expanded={open}
+        aria-label={explanation}
+        onClick={open ? closeTooltip : openTooltip}
+        className='cursor-pointer hover:opacity-70'
+      >
+        <img src={HelpSvg} alt='' className='w-3.5 h-3.5' />
+      </button>
+      {tooltipPortal}
+    </span>
+  )
+}
+
+// A gpt-6 image, of which the export keeps only the search phrase. Dashed,
+// unlike the clickable chips: there is nothing behind it to open.
+function ImagePlaceholder ({ query, label, explanation, matched }: { query: string, label: string, explanation: string, matched: boolean }): JSX.Element {
+  return (
+    <span className={`inline-flex items-center gap-1 m-1 rounded-lg border border-dashed border-grey3 bg-grey6 px-3 py-2 ${matched ? matchedRef : ''}`}>
+      <img src={ImagesSvg} alt='' className='w-5 h-5 pr-1 shrink-0' />
+      <span className='text-sm text-black'>
+        {label}: <span className='italic'>{query}</span>
+      </span>
+      <HelpButton explanation={explanation} />
+    </span>
+  )
+}
+
 // The link pill itself, plus its hover/tap popover (see useCitationTooltip).
 // Click still follows the link immediately on hover-capable devices,
 // unchanged from before; touch devices open the tooltip on first tap
@@ -1339,7 +1507,7 @@ function CitationPill ({ source, query }: { source: CitationSource, query: strin
 // from "show the debug data".
 type EntitySegment = Extract<ReferenceSegment, { kind: 'entity' }>
 
-function EntityChip ({ segment, query, onShowRaw, parentLabel }: { segment: EntitySegment, query: string, onShowRaw: (data: unknown, parentLabel: string) => void, parentLabel: string }): JSX.Element {
+function EntityChip ({ segment, query, onShowRaw, parentLabel }: { segment: EntitySegment, query: string, onShowRaw: ShowRaw, parentLabel: string }): JSX.Element {
   const matched = matchesQuery(segment.raw, query)
   const hasLink = segment.url != null
   const { wrapperRef, canHover, openTooltip, closeTooltip, tooltipPortal } = useCitationTooltip({
@@ -1476,7 +1644,7 @@ function NewsCarousel ({ segment, locale, query }: { segment: NavListSegment, lo
 // entry also holds long encoded lookup tokens that short terms would match.
 type ProductsSegment = Extract<ReferenceSegment, { kind: 'products' }>
 
-function ProductCarousel ({ segment, locale, query, productLabel, onShowRaw }: { segment: ProductsSegment, locale: string, query: string, productLabel: string, onShowRaw: (data: unknown, parentLabel: string) => void }): JSX.Element {
+function ProductCarousel ({ segment, locale, query, productLabel, onShowRaw }: { segment: ProductsSegment, locale: string, query: string, productLabel: string, onShowRaw: ShowRaw }): JSX.Element {
   const { previousLabel, nextLabel, productsLabel } = getTranslations({
     previousLabel: { en: 'Previous products', nl: 'Vorige producten' },
     nextLabel: { en: 'Next products', nl: 'Volgende producten' },
@@ -1533,49 +1701,68 @@ function ProductCarousel ({ segment, locale, query, productLabel, onShowRaw }: {
 // the Screen type above. Each is just `flex-1 overflow-y-auto`: exactly one
 // scroll container, sized by the panel around it.
 
-function SourcesScreen ({ sources, locale, searchQuery = '' }: { sources: SearchResultGroup[], locale: string, searchQuery?: string }): JSX.Element {
-  const { noSourcesMsg } = getTranslations({
+// citationNotice: opened from a gpt-6 citation (see 'answerSourcesCitation'),
+// which can't be matched to one of these sources - explained at the top.
+function SourcesScreen ({ sources, citationNotice = false, locale, searchQuery = '' }: { sources: SearchResultGroup[], citationNotice?: boolean, locale: string, searchQuery?: string }): JSX.Element {
+  const { noSourcesMsg, citationNoticeTitle, citationNoticeText } = getTranslations({
     noSourcesMsg: { en: 'No sources found for this conversation', nl: 'Geen bronnen gevonden voor dit gesprek' },
+    citationNoticeTitle: { en: 'Why don\'t you see the exact source?', nl: 'Waarom zie je niet de precieze bron?' },
+    citationNoticeText: {
+      en: 'This answer was written by GPT-6. For GPT-6, the data you downloaded from ChatGPT no longer says which source belongs to which reference in the text. That is why we cannot show you the exact source. Below are all the sources ChatGPT used for this answer.',
+      nl: 'Dit antwoord is geschreven door GPT-6. Bij GPT-6 staat in de gegevens die je van ChatGPT hebt gedownload niet meer welke bron bij welke verwijzing in de tekst hoort. Daarom kunnen we je niet de precieze bron laten zien. Hieronder staan alle bronnen die ChatGPT voor dit antwoord heeft gebruikt.',
+    },
   }, locale)
   const query = searchQuery.trim()
   const searchWords = queryTerms(query)
+  const highlight = (text: string): JSX.Element => <Highlighter searchWords={searchWords} autoEscape textToHighlight={text} highlightClassName='bg-tertiary rounded-sm' />
 
   const entries = sources.flatMap(group => group.entries ?? group.items ?? [])
+  // One entry per source: the link icon in a column of its own, so the
+  // title and what's under it line up beside it; a line in between.
+  const entryRow = (key: number, url: string | undefined, content: ReactNode): JSX.Element => (
+    <li key={key} className='flex items-start gap-1.5 py-2 text-sm border-b border-grey3 first:pt-0 last:border-none'>
+      {url != null
+        ? <img src={LinkSvg} alt='' className='w-3 h-3 mt-1 shrink-0' />
+        : <span className='w-3 shrink-0' />}
+      <div className='min-w-0 flex-1 break-words'>{content}</div>
+    </li>
+  )
+  const title = (text: string, url: string | undefined): JSX.Element => url != null
+    ? <a href={url} target='_blank' rel='noopener noreferrer' className='text-primary hover:underline font-semibold'>{highlight(text)}</a>
+    : <span className='font-semibold'>{highlight(text)}</span>
+
+  const webList = (
+    <ul className='flex flex-col'>
+      {entries.map((entry, i) => entryRow(i, entry.url, (
+        <>
+          {title(entry.title ?? entry.url ?? '', entry.url)}
+          {/* The website, small and dark grey so it doesn't compete with the title. */}
+          {entry.attribution != null && entry.attribution !== '' && (
+            <div className='text-xs mt-0.5'>
+              {entry.url != null
+                ? <a href={entry.url} target='_blank' rel='noopener noreferrer' className='text-grey1 hover:underline'>{highlight(entry.attribution)}</a>
+                : <span className='text-grey1'>{highlight(entry.attribution)}</span>}
+            </div>
+          )}
+          {entry.snippet != null && entry.snippet !== '' && (
+            <div className='text-grey2 mt-0.5'>{highlight(entry.snippet)}</div>
+          )}
+        </>
+      )))}
+    </ul>
+  )
 
   return (
     <div className='flex-1 overflow-y-auto p-3'>
+      {citationNotice && (
+        <div role='note' className='mb-3 rounded-lg border-l-4 border-warning bg-[#FFDCB0] p-3 text-sm text-black'>
+          <div className='font-bold mb-1'>{citationNoticeTitle}</div>
+          <div>{citationNoticeText}</div>
+        </div>
+      )}
       {entries.length === 0
         ? <div className='text-grey2 text-sm'>{noSourcesMsg}</div>
-        : (
-          <ul className='flex flex-col gap-2'>
-            {entries.map((entry, i) => (
-              <li key={i} className='text-sm border-b border-grey4 pb-2 last:border-none'>
-                {entry.url != null
-                  ? (
-                    <a
-                      href={entry.url}
-                      target='_blank'
-                      rel='noopener noreferrer'
-                      className='flex items-start gap-1 text-primary hover:underline font-semibold'
-                    >
-                      <img src={LinkSvg} className='w-3 h-3 mt-1 shrink-0' />
-                      <Highlighter searchWords={searchWords} autoEscape textToHighlight={entry.title ?? entry.url} highlightClassName='bg-tertiary rounded-sm' />
-                    </a>
-                    )
-                  : (
-                    <span className='font-semibold'>
-                      <Highlighter searchWords={searchWords} autoEscape textToHighlight={entry.title ?? ''} highlightClassName='bg-tertiary rounded-sm' />
-                    </span>
-                    )}
-                {entry.snippet != null && (
-                  <div className='text-grey2 mt-0.5'>
-                    <Highlighter searchWords={searchWords} autoEscape textToHighlight={entry.snippet} highlightClassName='bg-tertiary rounded-sm' />
-                  </div>
-                )}
-              </li>
-            ))}
-          </ul>
-          )}
+        : webList}
     </div>
   )
 }
@@ -1781,14 +1968,19 @@ const REF_TOKEN_RE = /^turn\d+\w+\d+$/
 const REF_TOKEN_PARTS_RE = /^turn(\d+)([A-Za-z_]+)(\d+)$/
 const PRODUCT_TOKEN_RE = /^turn\d+product\d+$/
 
+// `hiddenSlots: false` skips marking markers hidden by their
+// content_references slot (see hiddenMarkerIndices), for messages whose
+// markers don't take slots. `answerSources`, given for gpt-6 messages, are
+// the search results their citations open (see resolveCitation).
 export function resolveMessageReferences (
   message: string,
-  references: ContentReference[] | undefined
+  references: ContentReference[] | undefined,
+  { hiddenSlots = true, answerSources }: { hiddenSlots?: boolean, answerSources?: SearchResultGroup[] } = {}
 ): MessageSegment[] {
   const cursor = new ReferenceCursor(references ?? [])
   const entityRegistry: EntityRegistry = new Map()
   const segments: MessageSegment[] = []
-  const hiddenMarkers = hiddenMarkerIndices(message, references ?? [])
+  const hiddenMarkers = hiddenSlots ? hiddenMarkerIndices(message, references ?? []) : new Set<number>()
 
   let lastIndex = 0
   let markerIndex = 0
@@ -1805,7 +1997,7 @@ export function resolveMessageReferences (
       : match[3].split(FIELD_SEP)
     const hidden = hiddenMarkers.has(markerIndex++)
     cursor.inHiddenSlot = hidden
-    const segment = resolveMarker(keyword, params, match[0], cursor, entityRegistry)
+    const segment = resolveMarker(keyword, params, match[0], cursor, entityRegistry, answerSources)
     // Only label what is actually rendered: a hidden self-citation of an
     // entity resolves to an empty citation (see resolveCitation), which
     // shows nothing, so there is nothing to mark as hidden either.
@@ -1843,7 +2035,7 @@ function hiddenMarkerIndices (message: string, references: ContentReference[]): 
   return new Set(slots.flatMap((ref, i) => ref.type === 'hidden' ? [i] : []))
 }
 
-function resolveMarker (keyword: string, params: string[], marker: string, cursor: ReferenceCursor, entityRegistry: EntityRegistry): ReferenceSegment {
+function resolveMarker (keyword: string, params: string[], marker: string, cursor: ReferenceCursor, entityRegistry: EntityRegistry, answerSources?: SearchResultGroup[]): ReferenceSegment {
   switch (keyword) {
     case 'entity':
       return resolveEntity(params, cursor, entityRegistry)
@@ -1852,11 +2044,25 @@ function resolveMarker (keyword: string, params: string[], marker: string, curso
     case 'video':
       return resolveVideo(params, cursor)
     case 'cite':
-      return resolveCitation(params, cursor, entityRegistry)
+      return resolveCitation(params, cursor, entityRegistry, answerSources)
     case 'map':
       return resolveMap(marker, cursor)
     case 'image_group':
       return resolveImageGroup(params, cursor)
+    case 'layout_image':
+      // Not one of ChatGPT's own markers (see genuiMarkup): no content
+      // reference to consume.
+      return params[0] != null && params[0] !== '' ? { kind: 'imagePlaceholder', query: params[0] } : { kind: 'unknown', keyword, raw: { keyword, params } }
+    case 'icon':
+      // Like layout_image, one of genuiMarkup's own markers.
+      return params[0] != null && params[0] !== ''
+        ? { kind: 'layoutIcon', name: params[0], size: params[1] || undefined, color: params[2] || undefined }
+        : { kind: 'unknown', keyword, raw: { keyword, params } }
+    case 'badge':
+      // Also one of genuiMarkup's own markers.
+      return params[0] != null && params[0] !== ''
+        ? { kind: 'layoutBadge', text: params[0], color: params[1] || undefined }
+        : { kind: 'unknown', keyword, raw: { keyword, params } }
     case 'genui':
       return resolveGenui(params, cursor)
     case 'navlist':
@@ -1956,7 +2162,12 @@ function resolveVideo (params: string[], cursor: ReferenceCursor): ReferenceSegm
 //
 // Matches by the marker's own ref token(s) rather than by position - see the
 // module comment above.
-function resolveCitation (params: string[], cursor: ReferenceCursor, entityRegistry: EntityRegistry): ReferenceSegment {
+//
+// `answerSources` is given for gpt-6 messages. Their export has no
+// content_references entry per citation, only the search results of the
+// whole answer, regrouped by website, so which source a citation refers to
+// can't be determined. Such a citation opens the answer's sources instead.
+function resolveCitation (params: string[], cursor: ReferenceCursor, entityRegistry: EntityRegistry, answerSources?: SearchResultGroup[]): ReferenceSegment {
   const tokens = new Set(params)
 
   const ref = cursor.takeMatchingWebpage(tokens)
@@ -1978,6 +2189,8 @@ function resolveCitation (params: string[], cursor: ReferenceCursor, entityRegis
   if (params.length > 0 && params.every(token => entityRegistry.has(token))) {
     return { kind: 'citation', sources: [] }
   }
+
+  if (answerSources != null) return { kind: 'answerSourcesCitation', count: Math.max(params.length, 1), sources: answerSources }
 
   // Genuinely nothing backs this marker - surface that rather than treating
   // it the same as an expected, silent self-citation. The click-to-inspect
