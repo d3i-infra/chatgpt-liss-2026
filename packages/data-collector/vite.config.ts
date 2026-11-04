@@ -80,6 +80,9 @@ export default defineConfig({
     rollupOptions: {
       output: {
         manualChunks: (id) => {
+          // Not React itself: the icon set stays in the chunk that's loaded
+          // when an icon is shown (see layout_icon).
+          if (id.includes('lucide-react')) return undefined
           if (id.includes('react-dom') || id.includes('react')) return 'vendor'
           if (id.includes('@eyra/feldspar')) return 'feldspar'
         }
