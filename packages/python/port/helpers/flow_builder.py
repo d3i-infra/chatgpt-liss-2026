@@ -64,14 +64,14 @@ class FlowBuilder:
         self.UI_TEXT = {
             "submit_file_header": props.Translatable({
                 "en": f"Select your {self.platform_name} file",
-                "nl": f"Selecteer uw {self.platform_name} bestand",
+                "nl": f"Selecteer je {self.platform_name} bestand",
                 "de": f"Wählen Sie Ihre {self.platform_name}-Datei aus",
                 "it": f"Selezioni il suo file di {self.platform_name}",
                 "es": f"Seleccione su archivo de {self.platform_name}",
             }),
             "review_data_header": props.Translatable({
                 "en": f"Inspect your {self.platform_name} data",
-                "nl": f"Inspecteer uw {self.platform_name} gegevens",
+                "nl": f"Inspecteer je {self.platform_name} gegevens",
                 "de": f"Überprüfen Sie Ihre {self.platform_name}-Daten",
                 "it": f"Esamini i suoi dati di {self.platform_name}",
                 "es": f"Revise sus datos de {self.platform_name}",
@@ -85,7 +85,7 @@ class FlowBuilder:
             }),
             "review_data_description": props.Translatable({
                 "en": f"Here you find the {self.platform_name} data from your archive that are selected for donation. Please review these data before donating them for research.",
-                "nl": f"Hier vindt u de {self.platform_name} gegevens uit uw archief die zijn geselecteerd voor donatie. Inspecteer alstublieft deze gegevens voordat u ze doneert voor onderzoek.",
+                "nl": f"Hier vind je de {self.platform_name} gegevens uit je archief die zijn geselecteerd voor donatie. Bekijk deze gegevens alsjeblieft voordat je ze doneert voor onderzoek.",
                 "de": f"Hier finden Sie die {self.platform_name}-Daten aus Ihrem Archiv, die für die Datenspende ausgewählt wurden. Bitte überprüfen Sie diese Daten, bevor Sie sie für die Forschung spenden.",
                 "it": f"Qui trova i dati di {self.platform_name} del suo archivio selezionati per la donazione. La preghiamo di esaminare questi dati prima di donarli per la ricerca.",
                 "es": f"Aquí encontrará los datos de {self.platform_name} de su archivo seleccionados para la donación. Por favor, revise estos datos antes de donarlos para la investigación.",

@@ -138,11 +138,11 @@ def conversations_to_df(reader: ZipArchiveReader, errors: Counter) -> pd.DataFra
           "show_grid": false,
           "title": {
             "en": "Your conversations",
-            "nl": "Uw gesprekken"
+            "nl": "Je gesprekken"
           },
           "description": {
-            "en": "Below you find your conversations with ChatGPT. You can review the content of a conversation by clicking on it. You can also search through the conversations by typing in the search box. See the help buttons for further explanation.",
-            "nl": "Hieronder vindt u uw gesprekken met ChatGPT. U kunt de inhoud van een gesprek bekijken door erop te klikken. U kunt ook door de gesprekken zoeken door iets in het zoekvak te typen. Zie de helpknoppen voor meer uitleg."
+            "en": "Below you find your conversations with ChatGPT. You can review the content of a conversation by clicking or tapping on it. You can also search through the conversations by typing in the search box. See the help buttons for further explanation.",
+            "nl": "Hieronder vind je jouw gesprekken met ChatGPT. Je kunt de inhoud van een gesprek bekijken door erop te klikken of te tikken. Je kunt ook door de gesprekken zoeken door iets in het zoekvak te typen. Zie de helpknoppen voor meer uitleg."
           },
           "headers": {
             "conversation title": {"en": "Conversation title", "nl": "Gesprektitel"},
@@ -161,7 +161,7 @@ def conversations_to_df(reader: ZipArchiveReader, errors: Counter) -> pd.DataFra
             {
               "title": {
                 "en": "Your conversations",
-                "nl": "Uw gesprekken"
+                "nl": "Je gesprekken"
               },
               "type": "chat_conversation",
               "roleColumn": "role",

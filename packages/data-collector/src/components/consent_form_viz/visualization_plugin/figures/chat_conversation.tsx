@@ -262,7 +262,11 @@ export default function ChatConversation ({ visualizationData, locale, search, h
     setScreenStack([{ kind: 'messages' }])
   }, [visualizationData])
 
-  const { selectMsg, noDataMsg, deletedMsg, sourcesMsg, detailsMsg, referenceDataMsg, sourceDataMsg, messageLabel, backMsg, removeMsg, restoreMsg, removedPlaceholderMsg, youMsg, assistantMsg, hiddenMsgLabel, hiddenMsgTitle, thoughtsLabel, thoughtsTitle, reasoningRecapLabel, reasoningRecapTitle, multimodalLabel, multimodalTitle } = getTranslations({
+  const { conversationCountOneMsg, conversationCountMsg, matchCountOneMsg, matchCountMsg, selectMsg, noDataMsg, deletedMsg, sourcesMsg, detailsMsg, referenceDataMsg, sourceDataMsg, messageLabel, backMsg, removeMsg, restoreMsg, removedPlaceholderMsg, youMsg, assistantMsg, hiddenMsgLabel, hiddenMsgTitle, thoughtsLabel, thoughtsTitle, reasoningRecapLabel, reasoningRecapTitle, multimodalLabel, multimodalTitle } = getTranslations({
+    conversationCountOneMsg: { en: 'Your data contains 1 conversation', nl: 'Je gegevens bevatten 1 gesprek' },
+    conversationCountMsg: { en: 'Your data contains {n} conversations', nl: 'Je gegevens bevatten {n} gesprekken' },
+    matchCountOneMsg: { en: '1 conversation contains messages that match your search', nl: '1 gesprek bevat berichten die overeenkomen met je zoekopdracht' },
+    matchCountMsg: { en: '{n} conversations contain messages that match your search', nl: '{n} gesprekken bevatten berichten die overeenkomen met je zoekopdracht' },
     selectMsg: { en: 'Select a conversation', nl: 'Selecteer een gesprek' },
     noDataMsg: { en: 'No messages', nl: 'Geen berichten' },
     deletedMsg: { en: 'Delete', nl: 'Verwijder' },
@@ -382,41 +386,53 @@ export default function ChatConversation ({ visualizationData, locale, search, h
   // The conversation list itself - the desktop-docked left panel's entire
   // content, and (on mobile) one of the two things the single panel below
   // can be showing.
+  const conversationCount = visibleConversations.length
+  const conversationCountText = (query === ''
+    ? (conversationCount === 1 ? conversationCountOneMsg : conversationCountMsg)
+    : (conversationCount === 1 ? matchCountOneMsg : matchCountMsg)
+  ).replace('{n}', String(conversationCount))
+
+  // On a phone the list is a column of cards with a chevron, so it reads as
+  // something to tap (there's no hover to hint at it). Nothing is open yet
+  // there, so no card is marked as the selected one.
   const conversationListPanel = (
     <>
       <div className='shrink-0 p-2 border-b border-grey4 flex items-center justify-between'>
-        { query === '' ? (
-          <span className='italic text-sm'>{"Your data contains "} {visibleConversations.length} {visibleConversations.length === 1 ? 'conversation' : 'conversations'}</span>
-        ) :
-        (
-          <span className='italic text-sm'>{visibleConversations.length} {visibleConversations.length === 1 ? 'conversation contains messages that match your search' : 'conversations contain messages that match your search'}</span>
-        )
-      }
+        <span className='italic text-sm'>{conversationCountText}</span>
       </div>
-      <div className='overflow-y-auto flex flex-col'>
+      <div className={`overflow-y-auto flex flex-col ${isMobileLayout ? 'gap-2 p-2' : ''}`}>
         {visibleConversations.map(conv => (
           <div
             key={conv.title}
             onClick={() => { setSelectedTitle(conv.title); if (isMobileLayout) setMobileMessagesOpen(true) }}
-            className={`flex items-start justify-between gap-1 px-3 py-2 cursor-pointer border-b border-grey4 hover:bg-grey5 ${
-              activeTitle === conv.title ? 'bg-grey4 font-bold' : ''
-            }`}
+            className={isMobileLayout
+              ? 'flex items-center justify-between gap-3 rounded-lg border border-grey4 bg-white px-3 py-3 shadow-sm cursor-pointer active:bg-grey5'
+              : `flex items-start justify-between gap-1 px-3 py-2 cursor-pointer border-b border-grey4 hover:bg-grey5 ${
+                activeTitle === conv.title ? 'bg-grey4 font-bold' : ''
+              }`}
           >
             <div className='flex flex-col overflow-hidden'>
-              <span className='text-sm truncate'>
+              <span className={`text-sm ${isMobileLayout ? 'line-clamp-2 break-words' : 'truncate'}`}>
                 {highlight(conv.title, query)}
               </span>
               {conv.date != null && (
                 <span className='text-xs text-grey2'>{formatDate(conv.date, locale)}</span>
               )}
             </div>
-            <button
-              onClick={e => { e.stopPropagation(); deleteConversation(conv) }}
-              className={`shrink-0 mt-0.5 ${removePill}`}
-              title={deletedMsg}
-            >
-              <img src={RemoveSvg} className={removeIcon} />
-            </button>
+            <div className='flex items-center gap-4 shrink-0'>
+              <button
+                onClick={e => { e.stopPropagation(); deleteConversation(conv) }}
+                className={`shrink-0 ${isMobileLayout ? '' : 'mt-0.5'} ${removePill}`}
+                title={deletedMsg}
+              >
+                <img src={RemoveSvg} className={removeIcon} />
+              </button>
+              {isMobileLayout && (
+                <svg aria-hidden viewBox='0 0 24 24' className='w-5 h-5 text-grey2' fill='none' stroke='currentColor' strokeWidth={2} strokeLinecap='round' strokeLinejoin='round'>
+                  <path d='m9 18 6-6-6-6' />
+                </svg>
+              )}
+            </div>
           </div>
         ))}
       </div>
@@ -913,7 +929,7 @@ function renderBlocks (blocks: Array<LiteBlock<ReferenceSegment>>, labels: Label
     }
     if (inContainer && block.kind === 'paragraph' && block.children.every(c => c.type === 'text' && c.value.trim() === '')) return
     elements.push(parent === 'row'
-      ? <div key={i} className='min-w-0 max-w-[35%] shrink-0'>{renderBlock(block, labels, query, onShowRaw)}</div>
+      ? <div key={i} className='layout-row-cell min-w-0 max-w-[35%] shrink-0'>{renderBlock(block, labels, query, onShowRaw)}</div>
       : <Fragment key={i}>{renderBlock(block, labels, query, onShowRaw)}</Fragment>)
   })
   flushList('list-end')
@@ -1445,12 +1461,15 @@ function HelpButton ({ explanation }: { explanation: string }): JSX.Element {
 }
 
 // A gpt-6 image, of which the export keeps only the search phrase. Dashed,
-// unlike the clickable chips: there is nothing behind it to open.
+// unlike the clickable chips: there is nothing behind it to open. Beside text
+// in a layout row (renderBlocks) its column can be very narrow on a phone, so
+// there the icons go on top, the text below them, and long words break
+// rather than spill over the text next to it.
 function ImagePlaceholder ({ query, label, explanation, matched }: { query: string, label: string, explanation: string, matched: boolean }): JSX.Element {
   return (
-    <span className={`inline-flex items-center gap-1 m-1 rounded-lg border border-dashed border-grey3 bg-grey6 px-3 py-2 ${matched ? matchedRef : ''}`}>
+    <span className={`inline-flex items-center gap-1 m-1 rounded-lg border border-dashed border-grey3 bg-grey6 px-3 py-2 in-[.layout-row-cell]:flex-wrap in-[.layout-row-cell]:justify-between in-[.layout-row-cell]:max-w-full in-[.layout-row-cell]:m-0 in-[.layout-row-cell]:px-2 ${matched ? matchedRef : ''}`}>
       <img src={ImagesSvg} alt='' className='w-5 h-5 pr-1 shrink-0' />
-      <span className='text-sm text-black'>
+      <span className='text-sm text-black in-[.layout-row-cell]:order-last in-[.layout-row-cell]:basis-full in-[.layout-row-cell]:min-w-0 in-[.layout-row-cell]:text-xs in-[.layout-row-cell]:[overflow-wrap:anywhere]'>
         {label}: <span className='italic'>{query}</span>
       </span>
       <HelpButton explanation={explanation} />

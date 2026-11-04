@@ -235,7 +235,7 @@ function prepareCopy({ description, helpButton, helpText, locale }: Props): Copy
 const defaultDonateQuestionLabel = new TextBundle()
   .add('en', 'Do you want to share the above data?')
   .add('de', 'Möchten Sie die oben genannten Daten teilen?')
-  .add('nl', 'Wilt u de bovenstaande gegevens delen?')
+  .add('nl', 'Wil je de bovenstaande gegevens delen?')
   .add('it', 'Vuole condividere i dati sopra riportati?')
   .add('es', '¿Desea compartir los datos anteriores?')
 
@@ -268,12 +268,12 @@ const defaultHelpButtonLabel = new TextBundle()
 const defaultHelpText = new TextBundle()
   .add('en', 'Not all the data from the archive you just uploaded are needed for research. The research team has selected only the data that are needed to answer their research questions. Below you can review for each selected type of data what information from your archive will be shared when you choose to donate. You can inspect every item and remove anything you do not want to share. Use the search field to find specific items. Until you choose to share using the donate button at the bottom of the page, all data on this page stays with you on your device.')
   .add('de', 'Nicht alle Daten aus dem Archiv, das Sie gerade hochgeladen haben, werden für die Forschung benötigt. Das Forschungsteam hat nur die Daten ausgewählt, die benötigt werden, um ihre Forschungsfragen zu beantworten. Unten können Sie für jeden ausgewählten Datentyp überprüfen, welche Informationen aus Ihrem Archiv geteilt werden, wenn Sie sich entscheiden, diese zu spenden. Sie können jedes Element überprüfen und alles entfernen, was Sie nicht teilen möchten. Verwenden Sie das Suchfeld, um bestimmte Elemente zu finden. Bis Sie sich entscheiden, die Daten mit der Spenden-Schaltfläche am unteren Rand der Seite zu teilen, bleiben alle Daten auf dieser Seite bei Ihnen auf Ihrem Gerät.')
-  .add('nl', 'Niet alle gegevens uit het archief dat u zojuist hebt geüpload zijn nodig voor onderzoek. Het onderzoeksteam heeft alleen de gegevens geselecteerd die nodig zijn om hun onderzoeksvragen te beantwoorden. Hieronder kunt u voor elk type gegevens dat is geselecteerd bekijken welke informatie uit uw archief zal worden gedeeld als u kiest om te doneren. U kunt elk item inspecteren en alles verwijderen wat u niet wilt delen. Gebruik het zoekveld om specifieke items te vinden. Alle gegevens op deze pagina blijven bij u, op uw apparaat, totdat u ze besluit te delen met de donatieknop onderaan de pagina.')
+  .add('nl', 'Niet alle gegevens uit het archief dat je zojuist hebt geüpload zijn nodig voor onderzoek. Het onderzoeksteam heeft alleen de gegevens geselecteerd die nodig zijn om hun onderzoeksvragen te beantwoorden. Hieronder kun je voor elk type gegevens dat is geselecteerd bekijken welke informatie uit je archief zal worden gedeeld als je kiest om te doneren. Je kunt elk item inspecteren en alles verwijderen wat je niet wilt delen. Gebruik het zoekveld om specifieke items te vinden. Alle gegevens op deze pagina blijven bij jou, op je apparaat, totdat je besluit ze te delen met de donatieknop onderaan de pagina.')
 
 const defaultDescription = new TextBundle()
   .add('en', 'Determine whether you would like to share the data below. Carefully check the data and adjust when required. With your contribution, you help the previously described research. Thank you in advance.')
   .add('de', 'Legen Sie fest, ob Sie die untenstehenden Daten teilen möchten. Überprüfen Sie die Daten sorgfältig und passen Sie sie bei Bedarf an. Mit Ihrem Beitrag helfen Sie der zuvor beschriebenen Forschung. Vielen Dank im Voraus.')
-  .add('nl', 'Bepaal of u de onderstaande gegevens wilt delen. Bekijk de gegevens zorgvuldig en pas zo nodig aan. Met uw bijdrage helpt u het eerder beschreven onderzoek. Alvast hartelijk dank.')
+  .add('nl', 'Bepaal of je de onderstaande gegevens wilt delen. Bekijk de gegevens zorgvuldig en pas ze zo nodig aan. Met je bijdrage help je het eerder beschreven onderzoek. Alvast hartelijk dank.')
   .add('it', 'Decida se desidera condividere i dati riportati di seguito. Controlli attentamente i dati e li modifichi se necessario. Con il suo contributo aiuta la ricerca descritta in precedenza. Grazie in anticipo.')
   .add('es', 'Decida si desea compartir los datos que aparecen a continuación. Revise los datos con atención y modifíquelos si es necesario. Con su contribución ayuda a la investigación descrita anteriormente. Muchas gracias de antemano.')
 
