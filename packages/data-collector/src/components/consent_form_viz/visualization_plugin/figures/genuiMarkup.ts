@@ -147,14 +147,18 @@ export function genuiToMarkdown (message: string, model?: string): string {
 // name, size and color, and a loop over a written-out list is repeated once
 // per value. A list's items become "1." or "-" lines. A form
 // ChatGPT asked the user to fill in is shown as static text: radio options
-// as "○ option", an input as "✎ placeholder" and a button as "[ label ]";
+// as "○ option", an input or textarea as "✎ placeholder" and a button as
+// "[ label ]";
 // its state code ({@body const [x,setX] = ...}, {#each ...} and similar
 // directives) is dropped. Markdown links, which the dialect also uses,
 // become links too. Cite, Entity, Link and AsyncImage carry data, so they
 // become private-use reference markers (cite, entity, url, and layout_image
 // for an image the export only keeps the search phrase of; an
 // AsyncImageGroup gets one per image) and are resolved and rendered like
-// ChatGPT's own. MemoryCite (a reference to an earlier chat) is dropped, as
+// ChatGPT's own. So do a MapWidgetV2 (layout_map, with its title and points)
+// and a Chart (chart, with its data), which the viewer draws. Any other
+// component becomes a layout_widget marker with its code, which the viewer
+// shows as a widget, so a new widget never shows up as raw code. MemoryCite (a reference to an earlier chat) is dropped, as
 // references to earlier chats aren't donated. <CodeBlock> becomes a fenced code block; code blocks and
 // inline code are otherwise left untouched, so code that happens to contain
 // e.g. <title> survives. Tags outside this set are kept as text, so a new
@@ -168,7 +172,7 @@ const FIELD_SEP = ''
 const PREFIX_OPEN = '\u0000'
 const PREFIX_CLOSE = '\u0001'
 
-const LAYOUT_TAGS = 'box|row|grid|grid-item|list|list-item|form|radio-group|radio|input|button|text|title|caption|divider|icon|badge|Cite|Entity|Link|AsyncImageGroup|AsyncImage|MemoryCite'
+const LAYOUT_TAGS = 'box|row|grid|grid-item|list|list-item|form|radio-group|radio|input|textarea|button|text|title|caption|divider|icon|badge|Cite|Entity|Link|AsyncImageGroup|AsyncImage|MemoryCite|MapWidgetV2|Chart'
 // A {...} expression, e.g. onClick={() => f("a"+({"x":"y"})[k])}: nested
 // up to three levels, with braces inside its strings ignored.
 const expressionBody = (inner: string): string => `(?:"(?:[^"\\\\]|\\\\.)*"|[^{}"]|${inner})*`
@@ -199,11 +203,18 @@ const LAYOUT_PREFIX_RE = new RegExp(`${PREFIX_OPEN}([^${PREFIX_CLOSE}]*)${PREFIX
 // around a reference is split: its text stays bold, the reference itself
 // isn't (see unboldReferences).
 const REFERENCE_TAG = `<(?:Entity|Link|Cite)\\b${LAYOUT_ATTRS}/>`
+// Any other component, e.g. a widget this code doesn't know yet: a
+// capitalised tag (<SliderWidget .../> or <SliderWidget>...</SliderWidget>),
+// or a lowercase one with a JSX expression attribute (<slider value={x}/>).
+// Lowercase tags without one are left as text, as they could be HTML in
+// ordinary prose.
+const KNOWN_COMPONENTS = 'Cite|Entity|Link|AsyncImageGroup|AsyncImage|MemoryCite|MapWidgetV2|Chart|CodeBlock'
+const LAYOUT_WIDGET_RE = new RegExp(`<((?!(?:${KNOWN_COMPONENTS}|${LAYOUT_TAGS})(?![\\w.-]))[A-Za-z][\\w.-]*)(?![\\w.-])(${LAYOUT_ATTRS})(?:/>|(?<!/)>([\\s\\S]*?)</\\1\\s*>)`, 'g')
 const BOLD_WITH_REFERENCE_RE = new RegExp(`\\*\\*((?:(?!\\*\\*)[^\\n])*?${REFERENCE_TAG}(?:(?!\\*\\*)[^\\n])*?)\\*\\*`, 'g')
 const REFERENCE_TAG_RE = new RegExp(REFERENCE_TAG, 'g')
 // Detected by tags that aren't HTML, so prose about HTML isn't mistaken
 // for it.
-const LAYOUT_DETECT_RE = new RegExp(`<(?:box|row|grid|list|badge|radio-group)(?![\\w-])${LAYOUT_ATTRS}>|<(?:Cite|Entity|AsyncImage|AsyncImageGroup|icon|divider|MemoryCite)(?![\\w-])${LAYOUT_ATTRS}/>`)
+const LAYOUT_DETECT_RE = new RegExp(`<(?:box|row|grid|list|badge|radio-group)(?![\\w-])${LAYOUT_ATTRS}>|<(?:Cite|Entity|AsyncImage|AsyncImageGroup|icon|divider|MemoryCite|MapWidgetV2|Chart)(?![\\w-])${LAYOUT_ATTRS}/>|<[A-Z][\\w.]*(?=\\s[^>]*=\\{)\\s${LAYOUT_ATTRS}/>`)
 // Fenced code blocks (also indented ones, nested in a box) and inline
 // code spans.
 const CODE_RE = /^[ \t]*```[^\n]*\n[\s\S]*?^[ \t]*```[ \t]*$|`[^`\n]+`/gm
@@ -332,7 +343,8 @@ function layoutTagToMarkdown (isClosing: boolean, name: string, rawAttrs: string
     }
     case 'radio':
       return isClosing ? '\n' : prefix('○ ')
-    case 'input': {
+    case 'input':
+    case 'textarea': {
       const placeholder = stringAttr(attrs, 'placeholder')?.replace(/\*/g, '')
       return isClosing ? '' : `\n✎ ${placeholder != null ? `*${placeholder}*` : '…'}\n`
     }
@@ -381,6 +393,15 @@ function layoutTagToMarkdown (isClosing: boolean, name: string, rawAttrs: string
       // donated: they could still hold what's in a chat the participant
       // removed from the donation.
       return ''
+    case 'MapWidgetV2': {
+      // A map: its points, each written out (name, address, an emoji icon)
+      // or a reference to a search result, which the viewer counts.
+      const points = Array.isArray(attrs.points) ? attrs.points.filter(p => typeof p === 'object' && p != null) : []
+      return points.length > 0 ? `\n${marker('layout_map', stringAttr(attrs, 'title') ?? '', JSON.stringify(points))}\n` : ''
+    }
+    case 'Chart':
+      // A chart with all its data written out, drawn by the viewer.
+      return typeof attrs.content === 'object' && attrs.content != null ? `\n${marker('chart', JSON.stringify(attrs.content))}\n` : ''
     case 'caption':
       if (selfClosing) return ''
       return isClosing ? '*\n' : '\n*'
@@ -418,8 +439,24 @@ function unboldReferences (inner: string): string {
   return out + bold(inner.slice(lastIndex))
 }
 
+// An unknown component becomes a widget marker with its name and its code,
+// which the viewer shows as a widget whose code opens on click. The code is
+// JSON, with the characters the steps after this one act on (tags,
+// directives, links, emphasis) as \u escapes, so it reaches the viewer as
+// written.
+function widgetMarker (source: string, name: string, rawAttrs: string): string {
+  const component = /^[A-Z]/.test(name) || /=\{/.test(rawAttrs)
+  if (!component) return source
+  // The first line starts at the tag, so only the lines after it carry the
+  // message's indentation.
+  const [first, ...rest] = source.split('\n')
+  const code = JSON.stringify([first, ...(rest.length > 0 ? dedent(rest.join('\n')).split('\n') : [])].join('\n')).replace(/[<>{}[\]*_`]/g, c => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`)
+  return `\n${marker('layout_widget', name, code)}\n`
+}
+
 function convertLayoutProse (prose: string, state: LayoutState): string {
   return prose
+    .replace(LAYOUT_WIDGET_RE, (source: string, name: string, rawAttrs: string) => widgetMarker(source, name, rawAttrs))
     .replace(LAYOUT_DIRECTIVE_RE, '')
     .replace(BOLD_WITH_REFERENCE_RE, (_, inner: string) => unboldReferences(inner))
     .replace(LAYOUT_BADGE_RE, (_, rawAttrs: string, text: string) => text.trim() !== '' ? marker('badge', text.trim(), stringAttr(parseLayoutAttributes(rawAttrs), 'color') ?? '') : '')

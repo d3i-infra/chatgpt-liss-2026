@@ -412,7 +412,6 @@ def render_no_data_page(platform_name: str) -> CommandUIRender:
             "es": f"Lamentablemente, no se han encontrado datos relevantes en su archivo de {platform_name}.",
         }),
         ok=props.Translatable({"en": "Continue", "nl": "Doorgaan", "de": "Weiter", "it": "Continua", "es": "Continuar"}),
-        cancel=props.Translatable({"en": "Continue", "nl": "Doorgaan", "de": "Weiter", "it": "Continua", "es": "Continuar"}),
     )
     page = props.PropsUIPageDataSubmission(platform_name, header, body)
     return CommandUIRender(page)

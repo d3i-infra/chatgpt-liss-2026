@@ -254,6 +254,50 @@ describe('genuiToMarkdown layout dialect (gpt-6)', () => {
     expect(convert('Hot <icon name="thermometer-sun" size="xl" color="#D97706"/> day')).toBe(`Hot \n${m('icon', 'thermometer-sun', 'xl', '#D97706')}\nday`)
   })
 
+  it('turns a map into a map marker with its title and points', () => {
+    const msg = '## Op de kaart\n\n<MapWidgetV2 title="Uitslagen" points={[{"ref":"turn1business3"},{"id":"tx","name":"Texas","address":"Austin, Texas, USA","icon":"🔵"}]} />'
+    expect(convert(msg)).toBe(`## Op de kaart\n\n${m('layout_map', 'Uitslagen', '[{"ref":"turn1business3"},{"id":"tx","name":"Texas","address":"Austin, Texas, USA","icon":"🔵"}]')}`)
+  })
+
+  it('turns a chart into a chart marker with its data', () => {
+    const msg = 'Prijzen:\n\n<Chart content={{"chartType":"bar","meta":{"title":"Prijs"},"xKey":"range","series":[{"dataKey":"count"}],"data":[{"range":"Tot €20","count":1}]}}/>'
+    expect(convert(msg)).toBe(`Prijzen:\n\n${m('chart', '{"chartType":"bar","meta":{"title":"Prijs"},"xKey":"range","series":[{"dataKey":"count"}],"data":[{"range":"Tot €20","count":1}]}')}`)
+  })
+
+  // The widget markers in a converted message, with their code read back.
+  const widgets = (text: string): Array<{ name: string, code: unknown }> =>
+    [...text.matchAll(/layout_widget([^]*)([^]*)/g)].map(([, name, json]) => ({ name, code: JSON.parse(json) }))
+
+  it('turns a component it does not know into a widget marker with its code', () => {
+    expect(widgets(convert('<box>\n  <SliderWidget min={0} max={10}/>\n</box>')))
+      .toEqual([{ name: 'SliderWidget', code: '<SliderWidget min={0} max={10}/>' }])
+    expect(widgets(convert('<box>\n  <slider value={level} onChange={setLevel}/>\n</box>')))
+      .toEqual([{ name: 'slider', code: '<slider value={level} onChange={setLevel}/>' }])
+  })
+
+  it("keeps a widget's code as written, and converts what is around it", () => {
+    const code = '<Tabs value={tab}>\n  <text>**Eerste** [link](https://a.example) {@body x}</text>\n</Tabs>'
+    const out = convert(`Kies:\n${code}\n\nKlaar <Cite refs={["turn1search0"]}/>`)
+    expect(widgets(out)).toEqual([{ name: 'Tabs', code }])
+    expect(out.startsWith('Kies:')).toBe(true)
+    expect(out.endsWith(`Klaar ${m('cite', 'turn1search0')}`)).toBe(true)
+  })
+
+  it('leaves HTML-like text and unclosed tags in prose alone', () => {
+    expect(convert('<box>\n  Gebruik <b>vet</b> en #include <Wire.h> of List<String>.\n</box>'))
+      .toBe('Gebruik <b>vet</b> en #include <Wire.h> of List<String>.')
+  })
+
+  it('recognises a message by an unknown component alone', () => {
+    expect(isLayoutGenuiMarkup('Hier:\n\n<WeatherWidget location={"Leiden"}/>')).toBe(true)
+    expect(isLayoutGenuiMarkup('Use <Wire.h> and List<String>.')).toBe(false)
+  })
+
+  it('shows a textarea like an input', () => {
+    expect(convert('<box>\n  **Details**\n  <textarea value={details} onChange={setDetails} placeholder="Plak hier de link..." rows={2}/>\n</box>'))
+      .toContain('✎ *Plak hier de link...*')
+  })
+
   it('turns a CodeBlock with children into a fenced code block', () => {
     const msg = '<box>\n  <CodeBlock language="cpp" editable>\n  #include <Wire.h>\n\n  void setup() {\n    Wire.begin();\n  }\n  </CodeBlock>\n</box>'
     expect(convert(msg)).toBe('```cpp\n#include <Wire.h>\n\nvoid setup() {\n  Wire.begin();\n}\n```')

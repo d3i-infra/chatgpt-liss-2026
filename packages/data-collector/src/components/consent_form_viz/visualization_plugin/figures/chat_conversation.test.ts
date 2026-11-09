@@ -83,6 +83,33 @@ describe('resolveMessageReferences layout badges', () => {
   })
 })
 
+describe('resolveMessageReferences layout maps and charts', () => {
+  it('names the written-out places of a gpt-6 map and counts the referenced ones', () => {
+    const points = [{ ref: 'turn1business3' }, { id: 'tx', name: 'Texas', address: 'Austin, Texas, USA', icon: '🔵' }, { ref: 'turn1business0' }]
+    expect(resolveMessageReferences(`layout_mapUitslagen${JSON.stringify(points)}`, [])[0]).toEqual({
+      kind: 'ref',
+      segment: { kind: 'map', title: 'Uitslagen', places: [{ name: 'Texas', address: 'Austin, Texas, USA', icon: '🔵' }], unnamed: 2, raw: { title: 'Uitslagen', points } },
+    })
+  })
+
+  it('keeps a gpt-6 chart with its data', () => {
+    const chart = { chartType: 'bar', xKey: 'range', series: [{ dataKey: 'count' }], data: [{ range: 'Tot €20', count: 1 }] }
+    expect(resolveMessageReferences(`chart${JSON.stringify(chart)}`, [])[0])
+      .toEqual({ kind: 'ref', segment: { kind: 'chart', chart, raw: chart } })
+  })
+
+  it('shows a gpt-6 widget it does not know by its name, with its code behind it', () => {
+    const code = '<SliderWidget min={0}\n  max={10}/>'
+    expect(resolveMessageReferences(`layout_widgetSliderWidget${JSON.stringify(code)}`, [])[0])
+      .toEqual({ kind: 'ref', segment: { kind: 'widget', name: 'SliderWidget', raw: code } })
+  })
+
+  it('shows a map or chart it cannot read as unknown', () => {
+    expect(resolveMessageReferences('chart{not json', [])[0]).toMatchObject({ kind: 'ref', segment: { kind: 'unknown', keyword: 'chart' } })
+    expect(resolveMessageReferences('layout_map{}', [])[0]).toMatchObject({ kind: 'ref', segment: { kind: 'unknown', keyword: 'layout_map' } })
+  })
+})
+
 describe('resolveMessageReferences gpt-6 citations', () => {
   const sources = [{ domain: 'a.example', entries: [{ url: 'https://a.example/1', title: 'A' }] }]
 

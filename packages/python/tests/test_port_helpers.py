@@ -15,6 +15,13 @@ class TestRenderNoDataPage:
         d = result.toDict()
         assert d["page"]["__type__"] == "PropsUIPageDataSubmission"
 
+    def test_has_a_single_continue_button(self):
+        # A cancel label would draw a second, identical "Continue" button.
+        [body] = ph.render_no_data_page("ChatGPT").toDict()["page"]["body"]
+        assert body["__type__"] == "PropsUIPromptConfirm"
+        assert "ok" in body
+        assert "cancel" not in body
+
 
 class TestRenderSafetyErrorPage:
     def test_returns_command_ui_render(self):

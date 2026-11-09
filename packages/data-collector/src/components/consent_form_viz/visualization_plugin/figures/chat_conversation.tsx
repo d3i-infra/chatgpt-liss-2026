@@ -745,6 +745,17 @@ interface MapPlace {
   name?: string
   address?: string
   rating?: number
+  // An emoji a gpt-6 map gives the place, e.g. a party colour.
+  icon?: string
+}
+
+// A gpt-6 <Chart>, with all its data in the message (see genuiMarkup).
+interface LayoutChart {
+  chartType?: string
+  meta?: { title?: string, description?: string }
+  xKey?: string
+  series?: Array<{ dataKey?: string, label?: string }>
+  data?: Array<Record<string, unknown>>
 }
 
 interface NewsArticle {
@@ -764,7 +775,11 @@ type ReferenceSegment =
   // refers to, only which sources the answer used (see resolveCitation). So
   // it shows how many sources it cites, and opens the answer's sources.
   | { kind: 'answerSourcesCitation', count: number, sources: SearchResultGroup[] }
-  | { kind: 'map', places: MapPlace[], raw: unknown }
+  // A gpt-6 map has a title, and can have places that are only a reference
+  // to a search result, whose name the donated data doesn't have: those are
+  // counted (unnamed).
+  | { kind: 'map', places: MapPlace[], title?: string, unnamed?: number, raw: unknown }
+  | { kind: 'chart', chart: LayoutChart, raw: unknown }
   // The marker's title isn't shown by ChatGPT; kept as the row's accessible name.
   | { kind: 'navlist', title?: string, articles: NewsArticle[] }
   | { kind: 'products', products: ProductItem[] }
@@ -821,6 +836,9 @@ interface Labels {
   widgetHelp: string
   widgetLabel: string
   mapLabel: string
+  unnamedPlacesLabel: string
+  chartLabel: string
+  chartHelp: string
   unknownLabel: string
   entityLabel: string
   productLabel: string
@@ -872,6 +890,15 @@ function MessageContent ({ message, references, model, answerSources, locale, se
     },
     widgetLabel: { en: 'Widget', nl: 'Widget' },
     mapLabel: { en: 'Map', nl: 'Kaart' },
+    unnamedPlacesLabel: {
+      en: 'Places whose name is not in your data: {n}',
+      nl: 'Plaatsen waarvan de naam niet in je gegevens staat: {n}',
+    },
+    chartLabel: { en: 'Chart', nl: 'Grafiek' },
+    chartHelp: {
+      en: 'ChatGPT showed a chart here. It is drawn from the numbers in the text you donate. Click to see that text.',
+      nl: 'ChatGPT toonde hier een grafiek. Die is getekend uit de getallen in de tekst die je doneert. Klik om die tekst te zien.',
+    },
     unknownLabel: { en: 'Unknown', nl: 'Onbekend' },
     entityLabel: { en: 'Entity', nl: 'Entiteit' },
     productLabel: { en: 'Product', nl: 'Product' },
@@ -1041,7 +1068,7 @@ function renderInline (child: LiteInlineChild<ReferenceSegment>, labels: Labels,
 }
 
 function renderReference (segment: ReferenceSegment, labels: Labels, query: string, onShowRaw: ShowRaw) {
-  const { imagesLabel, imageLabel, imagePlaceholderTitle, imagesHelp, mapHelp, widgetHelp, widgetLabel, mapLabel, unknownLabel, entityLabel, productLabel, sourceLabel, sourcesLabel, answerSourcesTitle, hiddenLabel, hiddenTitle } = labels
+  const { imagesLabel, imageLabel, imagePlaceholderTitle, imagesHelp, mapHelp, widgetHelp, widgetLabel, mapLabel, unnamedPlacesLabel, chartLabel, chartHelp, unknownLabel, entityLabel, productLabel, sourceLabel, sourcesLabel, answerSourcesTitle, hiddenLabel, hiddenTitle } = labels
   switch (segment.kind) {
     case 'hidden': {
       // Same look as a hidden message: a dashed box with the "Hidden" label
@@ -1052,7 +1079,7 @@ function renderReference (segment: ReferenceSegment, labels: Labels, query: stri
       // so a long hidden link wraps inside its own box instead. Text-like
       // references sit on the text's baseline; chips are centred on the line.
       const inner = segment.segment.kind
-      const isBlock = inner === 'map' || inner === 'navlist' || inner === 'products'
+      const isBlock = inner === 'map' || inner === 'chart' || inner === 'navlist' || inner === 'products'
       const layout = isBlock
         ? 'block my-1 px-1'
         : inner === 'url' || inner === 'video' || inner === 'citation' || inner === 'answerSourcesCitation' || inner === 'entity'
@@ -1141,16 +1168,35 @@ function renderReference (segment: ReferenceSegment, labels: Labels, query: stri
         >
           <div className='flex items-center gap-1 mb-1'>
             <img src={MapSvg} className='w-5 h-5' />
-            <span className='font-bold text-sm'>{mapLabel}</span>
+            <span className='font-bold text-sm'>{segment.title != null ? `${mapLabel}: ${segment.title}` : mapLabel}</span>
             <HelpButton explanation={mapHelp} />
           </div>
           {segment.places.map((place, i) => (
             <span key={i} className='block'>
+              {place.icon != null && <span>{place.icon} </span>}
               <span className='font-normal'>{place.name}</span>
               {place.address != null && <span className='text-grey2'> — {place.address}</span>}
               {place.rating != null && <span className='text-grey2'> ({place.rating}★)</span>}
             </span>
           ))}
+          {segment.unnamed != null && segment.unnamed > 0 && (
+            <span className='block italic text-grey2'>{unnamedPlacesLabel.replace('{n}', String(segment.unnamed))}</span>
+          )}
+        </span>
+      )
+
+    case 'chart':
+      return (
+        <span
+          onClick={() => onShowRaw(segment.raw, chartLabel)}
+          className={`block my-1 rounded-lg border border-grey4 bg-white p-2 text-xs ${clickableRef} ${matchesQuery(segment.raw, query) ? matchedRef : ''}`}
+        >
+          <div className='flex items-center gap-1 mb-1'>
+            <span className='font-bold text-sm'>{segment.chart.meta?.title != null ? `${chartLabel}: ${segment.chart.meta.title}` : chartLabel}</span>
+            <HelpButton explanation={chartHelp} />
+          </div>
+          {segment.chart.meta?.description != null && <span className='block text-grey2 mb-2'>{segment.chart.meta.description}</span>}
+          <LayoutChartBody chart={segment.chart} />
         </span>
       )
 
@@ -1465,6 +1511,45 @@ function HelpButton ({ explanation }: { explanation: string }): JSX.Element {
 // in a layout row (renderBlocks) its column can be very narrow on a phone, so
 // there the icons go on top, the text below them, and long words break
 // rather than spill over the text next to it.
+// A bar chart with one series as bars, each labelled with its category and
+// value; any other chart as a table of its data, which says the same.
+function LayoutChartBody ({ chart }: { chart: LayoutChart }): JSX.Element {
+  const rows = chart.data ?? []
+  const series = (chart.series ?? []).filter(s => s.dataKey != null)
+  const xKey = chart.xKey
+  const cell = (value: unknown): string => typeof value === 'number' ? value.toLocaleString() : value == null ? '' : String(value)
+  if (chart.chartType === 'bar' && series.length === 1 && xKey != null) {
+    const key = series[0].dataKey as string
+    const values = rows.map(row => typeof row[key] === 'number' ? row[key] : 0)
+    const max = Math.max(1, ...values)
+    return (
+      <span className='grid grid-cols-[auto_1fr_auto] items-center gap-x-2 gap-y-1'>
+        {rows.map((row, i) => (
+          <Fragment key={i}>
+            <span className='text-grey1'>{cell(row[xKey])}</span>
+            <span className='h-3 rounded-sm bg-primary/70' style={{ width: `${(values[i] / max) * 100}%` }} />
+            <span className='tabular-nums text-right'>{cell(row[key])}</span>
+          </Fragment>
+        ))}
+        {series[0].label != null && <span className='col-span-3 text-grey2'>{series[0].label}</span>}
+      </span>
+    )
+  }
+  const columns = [...(xKey != null ? [{ key: xKey, label: xKey }] : []), ...series.map(s => ({ key: s.dataKey as string, label: s.label ?? s.dataKey as string }))]
+  return (
+    <span className='block overflow-x-auto'>
+      <table className='border-collapse'>
+        <thead>
+          <tr>{columns.map(c => <th key={c.key} className='border border-grey4 px-2 py-0.5 text-left font-semibold'>{c.label}</th>)}</tr>
+        </thead>
+        <tbody>
+          {rows.map((row, i) => <tr key={i}>{columns.map(c => <td key={c.key} className='border border-grey4 px-2 py-0.5'>{cell(row[c.key])}</td>)}</tr>)}
+        </tbody>
+      </table>
+    </span>
+  )
+}
+
 function ImagePlaceholder ({ query, label, explanation, matched }: { query: string, label: string, explanation: string, matched: boolean }): JSX.Element {
   return (
     <span className={`inline-flex items-center gap-1 m-1 rounded-lg border border-dashed border-grey3 bg-grey6 px-3 py-2 in-[.layout-row-cell]:flex-wrap in-[.layout-row-cell]:justify-between in-[.layout-row-cell]:max-w-full in-[.layout-row-cell]:m-0 in-[.layout-row-cell]:px-2 ${matched ? matchedRef : ''}`}>
@@ -1799,7 +1884,7 @@ function DetailsScreen ({ data, searchQuery = '' }: { data: unknown, searchQuery
         <Highlighter
           searchWords={queryTerms(query)}
           autoEscape
-          textToHighlight={JSON.stringify(data, null, 2)}
+          textToHighlight={typeof data === 'string' ? data : JSON.stringify(data, null, 2)}
           highlightClassName='bg-tertiary rounded-sm'
         />
       </pre>
@@ -2066,6 +2151,16 @@ function resolveMarker (keyword: string, params: string[], marker: string, curso
       return resolveCitation(params, cursor, entityRegistry, answerSources)
     case 'map':
       return resolveMap(marker, cursor)
+    case 'layout_map':
+      // genuiMarkup's own markers from here on: no content reference to
+      // consume.
+      return resolveLayoutMap(params)
+    case 'chart':
+      return resolveChart(params)
+    case 'layout_widget':
+      // A widget genuiMarkup doesn't know: its name and its code, which
+      // opens on click like an older model's widget.
+      return resolveLayoutWidget(params)
     case 'image_group':
       return resolveImageGroup(params, cursor)
     case 'layout_image':
@@ -2234,6 +2329,51 @@ function resolveMap (marker: string, cursor: ReferenceCursor): ReferenceSegment 
 
   if (places.length === 0) return { kind: 'unknown', keyword: 'map', raw: ref }
   return { kind: 'map', places, raw: ref }
+}
+
+// A gpt-6 map: [title, points as JSON]. A point is written out (name,
+// address, icon) or only a reference to a search result ({"ref": ...}),
+// which is counted rather than named. The export can resolve those in
+// metadata.view_state, which isn't donated (yet): see ADR-0043.
+function resolveLayoutMap (params: string[]): ReferenceSegment {
+  const [title, json] = params
+  let points: unknown
+  try {
+    points = JSON.parse(json ?? '')
+  } catch {
+    return { kind: 'unknown', keyword: 'layout_map', raw: { params } }
+  }
+  if (!Array.isArray(points)) return { kind: 'unknown', keyword: 'layout_map', raw: { params } }
+  const text = (value: unknown): string | undefined => typeof value === 'string' && value !== '' ? value : undefined
+  const places: MapPlace[] = []
+  let unnamed = 0
+  for (const point of points as Array<Record<string, unknown>>) {
+    const name = text(point?.name)
+    if (name == null) unnamed += 1
+    else places.push({ name, address: text(point.address), icon: text(point.icon) })
+  }
+  return { kind: 'map', places, title: text(title), unnamed, raw: { title: text(title), points } }
+}
+
+function resolveLayoutWidget (params: string[]): ReferenceSegment {
+  const [name, json] = params
+  try {
+    const code = JSON.parse(json ?? '') as unknown
+    if (typeof code === 'string') return { kind: 'widget', name: name ?? '', raw: code }
+  } catch {
+    // Unreadable: shown as unknown below.
+  }
+  return { kind: 'unknown', keyword: 'layout_widget', raw: { params } }
+}
+
+function resolveChart (params: string[]): ReferenceSegment {
+  try {
+    const chart = JSON.parse(params[0] ?? '') as unknown
+    if (typeof chart === 'object' && chart != null && Array.isArray((chart as LayoutChart).data)) return { kind: 'chart', chart: chart as LayoutChart, raw: chart }
+  } catch {
+    // Unreadable: shown as unknown below.
+  }
+  return { kind: 'unknown', keyword: 'chart', raw: { params } }
 }
 
 // A "navlist" marker carries a title and a comma-separated list of ref
