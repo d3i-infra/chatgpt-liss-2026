@@ -49,6 +49,8 @@ Load the ADR(s) whose filename matches the area you are touching.
 - [0040 — Present multi-part uploads as one archive-set](./0040-present-multi-part-uploads-as-one-archive-set.md)
 - [0043 — Donating the places behind gpt-6 map references](./0043-donating-the-places-behind-gpt-6-map-references.md)
 - [0044 — Donating references to earlier chats (parked)](./0044-donating-references-to-earlier-chats-parked.md)
+- [0045 — Skip unreadable items individually, tell the participant, donate the counts](./0045-skip-unreadable-items-individually-tell-the-participant-donate-the-counts.md)
+- [0048 — Over the donation budget keep the most recent conversations and say what was left out](./0048-over-the-donation-budget-keep-the-most-recent-conversations-and-say-what-was-left-out.md)
 
 ### Testing
 
@@ -64,11 +66,12 @@ Load the ADR(s) whose filename matches the area you are touching.
 - [0033 — Consent-viz donation must not route through DataSubmissionPage's factory data path](./0033-consent-viz-donation-must-not-route-through-datasubmissionpage-s-factory-data-path.md)
 - [0035 — Per-row work over participant tables must not allocate](./0035-per-row-work-over-participant-tables-must-not-allocate.md)
 - [0042 — Show unknown chat widgets as a chip with their code on click](./0042-show-unknown-chat-widgets-as-a-chip-with-their-code-on-click.md)
+- [0046 — Donate consent-page data as UTF-8 bytes passed through Python untouched](./0046-donate-consent-page-data-as-utf-8-bytes-passed-through-python-untouched.md)
+- [0047 — Donate in parts of at most 25 MB, each its own request, retried until confirmed](./0047-donate-in-parts-of-at-most-25-mb-each-its-own-request-retried-until-confirmed.md)
 
 ### Performance
 
 - [0034 — Hold participant-flow peak memory to the reference budget](./0034-hold-participant-flow-peak-memory-to-the-reference-budget.md)
-- [0041 — Donate consent-page data by staged reference, not through Python](./0041-donate-consent-page-data-by-staged-reference-not-through-python.md)
 
 ### Architecture
 

@@ -143,7 +143,7 @@ function conversationMatches (conv: Conversation, query: string): boolean {
   // the UI, so it shouldn't quietly pull a conversation into the results.
   return conv.messages.some(msg =>
     !(msg.removed ?? false) &&
-    matchesQuery([msg.message, msg.references, msg.sources, msg.timestamp].map(toSearchableText).join('\n'), query)
+    matchesQuery([msg.message, msg.references, msg.sources, msg.timestamp, msg.unreadableTimestamp].map(toSearchableText).join('\n'), query)
   )
 }
 
@@ -262,7 +262,7 @@ export default function ChatConversation ({ visualizationData, locale, search, h
     setScreenStack([{ kind: 'messages' }])
   }, [visualizationData])
 
-  const { conversationCountOneMsg, conversationCountMsg, matchCountOneMsg, matchCountMsg, selectMsg, noDataMsg, deletedMsg, sourcesMsg, detailsMsg, referenceDataMsg, sourceDataMsg, messageLabel, backMsg, removeMsg, restoreMsg, removedPlaceholderMsg, youMsg, assistantMsg, hiddenMsgLabel, hiddenMsgTitle, thoughtsLabel, thoughtsTitle, reasoningRecapLabel, reasoningRecapTitle, multimodalLabel, multimodalTitle } = getTranslations({
+  const { conversationCountOneMsg, conversationCountMsg, matchCountOneMsg, matchCountMsg, selectMsg, noDataMsg, deletedMsg, sourcesMsg, detailsMsg, referenceDataMsg, sourceDataMsg, messageLabel, backMsg, removeMsg, restoreMsg, removedPlaceholderMsg, youMsg, assistantMsg, timeUnreadableMsg, timeUnreadableTitle, hiddenMsgLabel, hiddenMsgTitle, thoughtsLabel, thoughtsTitle, reasoningRecapLabel, reasoningRecapTitle, multimodalLabel, multimodalTitle } = getTranslations({
     conversationCountOneMsg: { en: 'Your data contains 1 conversation', nl: 'Je gegevens bevatten 1 gesprek' },
     conversationCountMsg: { en: 'Your data contains {n} conversations', nl: 'Je gegevens bevatten {n} gesprekken' },
     matchCountOneMsg: { en: '1 conversation contains messages that match your search', nl: '1 gesprek bevat berichten die overeenkomen met je zoekopdracht' },
@@ -281,6 +281,11 @@ export default function ChatConversation ({ visualizationData, locale, search, h
     removedPlaceholderMsg: { en: '<message removed>', nl: '<bericht verwijderd>' },
     youMsg: { en: 'You', nl: 'Jij' },
     assistantMsg: { en: 'Assistant', nl: 'Assistent' },
+    timeUnreadableMsg: { en: 'Time unreadable', nl: 'Tijd onleesbaar' },
+    timeUnreadableTitle: {
+      en: 'The time of this message in your chat data could not be read. Original value: {value}',
+      nl: 'De tijd van dit bericht in je chatgegevens kon niet worden gelezen. Oorspronkelijke waarde: {value}',
+    },
     hiddenMsgLabel: { en: 'Hidden', nl: 'Verborgen' },
     hiddenMsgTitle: {
       en: 'This message is present in your chat data, but ChatGPT did not show it during the original conversation.',
@@ -546,6 +551,15 @@ export default function ChatConversation ({ visualizationData, locale, search, h
                         msg.timestamp != null &&
                         msg.timestamp !== "" &&
                         ` at ${formatDate(msg.timestamp, locale)}`}
+
+                      {!isRemoved && msg.unreadableTimestamp != null && (
+                        <>
+                          {' · '}
+                          <span title={timeUnreadableTitle.replace('{value}', msg.unreadableTimestamp)}>
+                            {timeUnreadableMsg}
+                          </span>
+                        </>
+                      )}
 
                       {!isRemoved &&
                         msg.branchCount != null &&

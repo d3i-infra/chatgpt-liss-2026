@@ -9,6 +9,7 @@ export async function prepareConversationData (
   const messageIdx = heads.indexOf(visualization.messageColumn)
   const modelIdx = visualization.modelColumn !== undefined ? heads.indexOf(visualization.modelColumn) : -1
   const timestampIdx = visualization.timestampColumn !== undefined ? heads.indexOf(visualization.timestampColumn) : -1
+  const unreadableTimestampIdx = visualization.unreadableTimestampColumn !== undefined ? heads.indexOf(visualization.unreadableTimestampColumn) : -1
   const titleIdx = visualization.titleColumn !== undefined ? heads.indexOf(visualization.titleColumn) : -1
   const referencesIdx = visualization.referencesColumn !== undefined ? heads.indexOf(visualization.referencesColumn) : -1
   const sourcesIdx = visualization.sourcesColumn !== undefined ? heads.indexOf(visualization.sourcesColumn) : -1
@@ -36,7 +37,12 @@ export async function prepareConversationData (
     const role = roleIdx >= 0 ? (row.cells[roleIdx] ?? '') : ''
     const message = messageIdx >= 0 ? (row.cells[messageIdx] ?? '') : ''
     const model = modelIdx >= 0 ? row.cells[modelIdx] : undefined
-    const timestamp = timestampIdx >= 0 ? row.cells[timestampIdx] : undefined
+    const rawTimestamp = timestampIdx >= 0 ? row.cells[timestampIdx] : undefined
+    // A time is unreadable when the extractor says so, or when the time
+    // column holds something that is not a date: show that plainly instead
+    // of "Invalid Date", and keep the value out of date sorting.
+    const unreadableTimestamp = unreadableTimestampOf(rawTimestamp, unreadableTimestampIdx >= 0 ? row.cells[unreadableTimestampIdx] : undefined)
+    const timestamp = unreadableTimestamp === undefined ? rawTimestamp : undefined
     const references = referencesIdx >= 0 ? parseReferences(row.cells[referencesIdx]) : undefined
     const sources = sourcesIdx >= 0 ? parseSources(row.cells[sourcesIdx]) : undefined
     const messageId = idIdx >= 0 ? row.cells[idIdx] : undefined
@@ -44,7 +50,7 @@ export async function prepareConversationData (
     const hidden = hiddenIdx >= 0 && isTrue(row.cells[hiddenIdx])
     const contentType = contentTypeIdx >= 0 ? row.cells[contentTypeIdx] : undefined
 
-    const msg: ConversationMessage = { id: row.id, role, message, model, timestamp, references, sources, messageId, reactionTo, removed, hidden, contentType }
+    const msg: ConversationMessage = { id: row.id, role, message, model, timestamp, unreadableTimestamp, references, sources, messageId, reactionTo, removed, hidden, contentType }
 
     if (!conversationMap.has(title)) {
       conversationMap.set(title, { title, rowIds: [], messages: [] })
@@ -219,4 +225,12 @@ function parseSources (cell: string | undefined): SearchResultGroup[] | undefine
   } catch {
     return undefined
   }
+}
+
+// The original value of a time that could not be read, or undefined when the
+// time is fine or simply absent.
+export function unreadableTimestampOf (timestamp: string | undefined, unreadable: string | undefined): string | undefined {
+  if (unreadable != null && unreadable !== '') return unreadable
+  if (timestamp != null && timestamp !== '' && Number.isNaN(new Date(timestamp).getTime())) return timestamp
+  return undefined
 }

@@ -1,5 +1,4 @@
 import CommandRouter from './command_router'
-import { stageDonation } from './staged_donations'
 import { Bridge } from './types/modules'
 
 function routerWith (sent: any[]): CommandRouter {
@@ -12,31 +11,32 @@ function routerWith (sent: any[]): CommandRouter {
   return new CommandRouter(bridge, {} as any)
 }
 
-describe('CommandRouter staged donations', () => {
-  it('sends the staged data to the bridge and replies with the id-only command', async () => {
+// The consent page donates UTF-8 bytes that travel through the worker and Python
+// untouched; the host contract is still a json_string string over the bridge, and the
+// Response echoed to the worker must not carry the donation again (the worker hands
+// only the payload to Python, so that copy is never read).
+describe('CommandRouter donations', () => {
+  it('decodes a bytes donation to a string for the bridge', async () => {
     const sent: any[] = []
-    const id = stageDonation('{"rows": 1}')
-    const command = { __type__: 'CommandSystemDonate', key: 's-chatgpt', json_string: '', staged_id: id } as const
+    const json = '{"héllo": "👋"}'
+    const command = { __type__: 'CommandSystemDonate', key: 'k', json_string: new TextEncoder().encode(json) } as const
     const response = await routerWith(sent).onCommandSystem(command)
-    expect(sent).toEqual([{ __type__: 'CommandSystemDonate', key: 's-chatgpt', json_string: '{"rows": 1}' }])
-    expect(response.command).toBe(command)
-    expect(response.payload).toEqual({ __type__: 'PayloadResponse', value: { success: true, key: 's-chatgpt', status: 200 } })
+    expect(sent).toEqual([{ __type__: 'CommandSystemDonate', key: 'k', json_string: json }])
+    expect(response.payload).toEqual({ __type__: 'PayloadResponse', value: { success: true, key: 'k', status: 200 } })
   })
 
-  it('donates a staged payload only once', async () => {
-    const sent: any[] = []
-    const id = stageDonation('x')
-    const command = { __type__: 'CommandSystemDonate', key: 'k', json_string: '', staged_id: id } as const
-    await routerWith(sent).onCommandSystem(command)
-    const second = await routerWith(sent).onCommandSystem(command)
-    expect(sent).toHaveLength(1)
-    expect(second.payload).toEqual({ __type__: 'PayloadResponse', value: { success: false, key: 'k', status: 0, error: 'Staged donation not found' } })
-  })
-
-  it('sends an ordinary donation unchanged', async () => {
+  it('sends a string donation as is', async () => {
     const sent: any[] = []
     const command = { __type__: 'CommandSystemDonate', key: 'k', json_string: '{"a":1}' } as const
     await routerWith(sent).onCommandSystem(command)
-    expect(sent).toEqual([command])
+    expect(sent).toEqual([{ __type__: 'CommandSystemDonate', key: 'k', json_string: '{"a":1}' }])
+  })
+
+  it('echoes the command to the worker without the donation', async () => {
+    const sent: any[] = []
+    for (const json_string of ['{"a":1}', new TextEncoder().encode('{"a":1}')]) {
+      const response = await routerWith(sent).onCommandSystem({ __type__: 'CommandSystemDonate', key: 'k', json_string } as any)
+      expect(response.command).toEqual({ __type__: 'CommandSystemDonate', key: 'k', json_string: '' })
+    }
   })
 })

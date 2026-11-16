@@ -239,15 +239,20 @@ def replace_months(input_string: str) -> str:
     return input_string
 
 
-def epoch_to_iso(epoch_timestamp: str | int | float, errors: Counter | None = None) -> str:
+def epoch_to_iso(epoch_timestamp: str | int | float, errors: Counter | None = None, keep_invalid: bool = True) -> str:
     """
     Convert epoch timestamp to an ISO 8601 string, assuming UTC.
 
     Args:
         epoch_timestamp (str | int): The epoch timestamp to convert.
+        errors (Counter | None): Counts a failed conversion as ``TimestampParseError``.
+        keep_invalid (bool): Return the original input when conversion fails
+            (default). With False, return ``""`` instead, so the result is
+            always ISO 8601 or empty; the caller keeps the original elsewhere.
 
     Returns:
-        str: The ISO 8601 formatted string, or the original input if conversion fails.
+        str: The ISO 8601 formatted string; on failure the original input, or
+        ``""`` when ``keep_invalid`` is False.
 
     Raises:
         Exception: Logs an error message if conversion fails.
@@ -269,6 +274,8 @@ def epoch_to_iso(epoch_timestamp: str | int | float, errors: Counter | None = No
         logger.error("Could not convert epoch time timestamp, %s", e)
         if errors is not None:
             errors["TimestampParseError"] += 1
+        if not keep_invalid:
+            return ""
 
     return out
 
@@ -458,6 +465,13 @@ def _read_json(json_input: Any, json_reader: Callable[[Any, str], Any], errors: 
             logger.error("%s, could not convert json bytes", e)
             if errors is not None:
                 errors["TypeError"] += 1
+            break
+        except MemoryError:
+            # Counted by name: the flow then says "too large", not "damaged"
+            # (Eyra review R01).
+            logger.error("Out of memory while converting json bytes")
+            if errors is not None:
+                errors["MemoryError"] += 1
             break
         except Exception as e:
             logger.error("%s, could not convert json bytes", e)
@@ -709,18 +723,30 @@ class ZipArchiveReader:
 
         Returns results sorted lexicographically by member path.
         Used for paginated exports (post_comments_1.json, _2.json, etc.).
+        Holds every parsed file at once; use ``json_each`` for large exports.
+        """
+        return list(self.json_each(pattern))
+
+    def json_each(self, pattern: str) -> Iterator[JsonExtractionResult]:
+        """Like ``json_all``, but read, parse and yield one file at a time.
+
+        The generator keeps no reference to a file once it is yielded, so a
+        consumer that drops each result before asking for the next holds at
+        most one parsed file in memory (Eyra review R01: large ChatGPT exports
+        split over many conversations parts).
         """
         matches = sorted(m for m in self.archive_members if re.search(pattern, m))
-        results = []
         for member in matches:
-            b = self._read_member_bytes(member)
-            raw = b.read()
+            raw = self._read_member_bytes(member).getvalue()
             if not raw:
-                results.append(JsonExtractionResult(found=True, data={}, member_path=member))
+                yield JsonExtractionResult(found=True, data={}, member_path=member)
                 continue
             data = _read_json(raw, _json_reader_bytes, errors=self.errors)
-            results.append(JsonExtractionResult(found=True, data=data, member_path=member))
-        return results
+            del raw  # the bytes are not needed once parsed
+            result = JsonExtractionResult(found=True, data=data, member_path=member)
+            del data
+            yield result
+            del result
 
     def csv(self, filename: str) -> CsvExtractionResult:
         """Extract and parse a CSV file.

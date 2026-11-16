@@ -27,6 +27,7 @@ priority: invariant
 
 - Do not narrow or remove the broad `except Exception` around wrapped-generator advancement unless the replacement preserves consent-gated traceback donation.
 - Keep `error_flow()` as the path for participant-reviewed traceback donation; do not add a JS-side path that forwards Python exception text without consent.
+- The error page keeps the traceback out of the participant-facing message but still reviewable: plain-language text, then a collapsed `PropsUIPromptTechnicalDetails` section ("Technical details (included in the report)") holding the traceback, then Report/Skip. Never drop the traceback from the page while still donating it — the participant must be able to see what the report contains (Eyra code review R04, 2026-11-16).
 - The boundary covers generator advancement, not bugs in `ScriptWrapper`, `error_flow()`, worker `unwrap()`, or ordinary expected parsing failures.
 - The JS worker/logging/bridge files are in `applies_to` as **enforcement points** for the no-unconsented-forwarding half of this invariant, not merely as context: `main.py` is the primary consent-boundary implementation; `py_worker.js` must not post raw Python errors as log/`error` events (its current fallback only renders a UI page); `worker_engine.ts` / `logging.ts` / `assembly.ts` must not capture or forward Python traceback text without consent; `live_bridge.ts` / `fake_bridge.ts` must not widen `sendLogs()` into raw stack/context forwarding that reopens the leak.
 

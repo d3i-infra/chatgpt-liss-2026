@@ -218,6 +218,9 @@ export const zConversationVisualization = zVisualizationProps.extend({
   messageColumn: z.string(),
   modelColumn: z.string().optional(),
   timestampColumn: z.string().optional(),
+  // Per message: the original time value when it could not be read as a time
+  // (empty otherwise). Such messages show "Time unreadable" instead of a date.
+  unreadableTimestampColumn: z.string().optional(),
   titleColumn: z.string().optional(),
   referencesColumn: z.string().optional(),
   sourcesColumn: z.string().optional(),
@@ -381,6 +384,9 @@ export interface ConversationMessage {
   message: string
   model?: string
   timestamp?: string
+  // The original time value when it could not be read as a time; the message
+  // then shows "Time unreadable" (see unreadableTimestampColumn).
+  unreadableTimestamp?: string
   references?: ContentReference[]
   sources?: SearchResultGroup[]
   messageId?: string

@@ -25,8 +25,12 @@ test('error flow donates report, shows task-incomplete page, and exits nonzero',
   await fileChooser.setFiles(path.join(__dirname, 'error-trigger.zip'));
   await page.getByText('Continue').click();
 
-  // Consent-gated error page (ADR-0022)
-  await expect(page.getByText('Something went wrong')).toBeVisible({ timeout: 60000 });
+  // Consent-gated error page (ADR-0022): plain message, traceback collapsed
+  // under "Technical details" (Eyra review R04) but readable before consenting.
+  await expect(page.getByText('Something went wrong', { exact: true })).toBeVisible({ timeout: 60000 });
+  await expect(page.getByText('Intentional test error', { exact: false })).toBeHidden();
+  await page.getByText('Technical details (included in the report)').click();
+  await expect(page.getByText('Intentional test error', { exact: false })).toBeVisible();
 
   // Capture the error-report donation while consenting to it
   const submission = new Promise<string | null>((resolve) => {
@@ -41,6 +45,10 @@ test('error flow donates report, shows task-incomplete page, and exits nonzero',
   expect(submittedData).toEqual(expect.stringContaining('error-report'));
   expect(submittedData).toEqual(expect.stringContaining('Intentional test error'));
 
+  // Offered to try again with another file; stopping ends the task
+  await expect(page.getByRole('heading', { name: 'Try again?' })).toBeVisible();
+  await page.getByText('Stop', { exact: true }).click();
+
   // Terminal task-incomplete page instead of a stale error page
   await expect(page.getByText('Task not completed')).toBeVisible();
   await expect(page.getByText('This task could not be completed', { exact: false })).toBeVisible();
@@ -51,6 +59,34 @@ test('error flow donates report, shows task-incomplete page, and exits nonzero',
     .poll(() => consoleMessages.find((m) => m.includes('[FakeBridge] received exit')), { timeout: 30000 })
     .toContain('received exit: 1=Error flow completed');
   expect(consoleMessages.find((m) => m.includes('received exit: 0='))).toBeUndefined();
+});
+
+/**
+ * Eyra review R04: after an error the participant can try again with another
+ * file instead of being stuck. "Try again" restarts the flow at the upload
+ * prompt, and no exit (completion or otherwise) is sent.
+ */
+test('error flow offers try again, which returns to the upload prompt', async ({ page }) => {
+  const consoleMessages: string[] = [];
+  page.on('console', (msg) => consoleMessages.push(msg.text()));
+
+  await page.goto('http://localhost:3000/');
+  await expect(page.getByRole('heading', { name: 'Select your example file' })).toBeVisible({ timeout: 90000 });
+
+  const fileChooserPromise = page.waitForEvent('filechooser');
+  await page.getByText('Choose file').click();
+  const fileChooser = await fileChooserPromise;
+  await fileChooser.setFiles(path.join(__dirname, 'error-trigger.zip'));
+  await page.getByText('Continue').click();
+
+  await expect(page.getByText('Something went wrong', { exact: true })).toBeVisible({ timeout: 60000 });
+  await page.getByText('Skip', { exact: true }).click();
+
+  await expect(page.getByRole('heading', { name: 'Try again?' })).toBeVisible();
+  await page.getByText('Try again', { exact: true }).click();
+
+  await expect(page.getByRole('heading', { name: 'Select your example file' })).toBeVisible({ timeout: 60000 });
+  expect(consoleMessages.find((m) => m.includes('[FakeBridge] received exit'))).toBeUndefined();
 });
 
 /**

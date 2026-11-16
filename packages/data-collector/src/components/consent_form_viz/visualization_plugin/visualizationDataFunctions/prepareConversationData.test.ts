@@ -1,4 +1,4 @@
-import { prepareConversationData } from './prepareConversationData'
+import { prepareConversationData, unreadableTimestampOf } from './prepareConversationData'
 import { ConversationVisualization, Table } from '../types'
 
 const COLUMNS = ['conversation title', 'role', 'message', 'time', 'message id', 'reaction to', 'hidden']
@@ -95,5 +95,47 @@ describe('prepareConversationData content type', () => {
   it('leaves it unset without a content type column', async () => {
     const data = await prepareConversationData(table, visualization)
     expect(data.conversations[0].messages.every((m) => m.contentType === undefined)).toBe(true)
+  })
+})
+
+// Eyra review R05: a time that could not be read is shown as such, never as
+// "Invalid Date", and its original value is kept for display.
+describe('prepareConversationData unreadable time', () => {
+  const columns = ['conversation title', 'role', 'message', 'time', 'unreadable time', 'message id', 'reaction to']
+  const table: Table = {
+    id: 'chatgpt_conversations',
+    head: { cells: columns },
+    body: {
+      rows: [
+        { id: 'q', cells: ['Chat', 'user', 'hi', '2026-01-01T10:00:00+00:00', '', 'q', ''] },
+        { id: 'a', cells: ['Chat', 'assistant', 'hello', '', '1783692498900000', 'a', 'q'] },
+        { id: 'b', cells: ['Chat', 'assistant', 'again', 'not a date', '', 'b', 'a'] },
+      ]
+    }
+  }
+  const viz: ConversationVisualization = { ...visualization, hiddenColumn: undefined, unreadableTimestampColumn: 'unreadable time' }
+
+  it('marks messages whose time could not be read, with the original value', async () => {
+    const data = await prepareConversationData(table, viz)
+    const byId = Object.fromEntries(data.conversations[0].messages.map((m) => [m.id, m]))
+    expect(byId.q.timestamp).toBe('2026-01-01T10:00:00+00:00')
+    expect(byId.q.unreadableTimestamp).toBeUndefined()
+    expect(byId.a.timestamp).toBeUndefined()
+    expect(byId.a.unreadableTimestamp).toBe('1783692498900000')
+    // Not flagged by the extractor, but not a date either.
+    expect(byId.b.timestamp).toBeUndefined()
+    expect(byId.b.unreadableTimestamp).toBe('not a date')
+  })
+
+  it('dates the conversation by its readable times only', async () => {
+    const data = await prepareConversationData(table, viz)
+    expect(data.conversations[0].date).toBe('2026-01-01T10:00:00+00:00')
+  })
+})
+
+describe('unreadableTimestampOf', () => {
+  it('treats empty times as absent, not unreadable', () => {
+    expect(unreadableTimestampOf('', '')).toBeUndefined()
+    expect(unreadableTimestampOf(undefined, undefined)).toBeUndefined()
   })
 })

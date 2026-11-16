@@ -30,6 +30,8 @@ Python diagnostics stay local; host-visible milestones are explicit PII-free `Co
 
 ## Guidance
 
+- `py_worker.js` posts `initialiseFailed` when Pyodide cannot start; `WorkerProcessingEngine` logs only a fixed text for it and shows the error page. Any raw error text stays on that page, collapsed, and never reaches the logger or the host (Eyra review R01).
+
 - Do not auto-forward Python module loggers or raw Python error strings to the host; hidden forwarding pipelines are forbidden — in particular, `LogForwardingHandler` (the rejected hidden-handler mechanism) must never be attached to a port logger.
 - Keep local diagnostics on module (`__name__`) loggers for in-browser debugging.
 - Emit host-visible milestones deliberately via `port_helpers.emit_log()` with a constrained PII-free vocabulary.

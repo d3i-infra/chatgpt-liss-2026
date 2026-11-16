@@ -91,6 +91,19 @@ describe('selectVisualizationColumns', () => {
     expect(projected.body.rows[0].cells).toEqual(['music', 'video one', '2024-01-01', 'https://a.example', '10'])
   })
 
+  it('keeps the unreadable-time column a chat_conversation declares', () => {
+    const visualization: VisualizationType = {
+      title: { en: 'conversations' },
+      type: 'chat_conversation',
+      roleColumn: 'category',
+      messageColumn: 'title',
+      timestampColumn: 'date',
+      unreadableTimestampColumn: 'duration'
+    }
+    const projected = selectVisualizationColumns(makeTable(), visualization)
+    expect(projected.head.cells).toEqual(['category', 'title', 'date', 'duration'])
+  })
+
   it('omits chat_conversation optionals the visualization did not declare', () => {
     const visualization: VisualizationType = {
       title: { en: 'conversations' },

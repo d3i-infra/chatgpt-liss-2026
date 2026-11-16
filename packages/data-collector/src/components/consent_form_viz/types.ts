@@ -16,6 +16,9 @@ export interface PropsUIPromptConsentFormTableViz {
   headers?: Record<string, Text>
   folded: boolean
   delete_option: boolean
+  // Error counts from extracting this table (e.g. skipped messages), donated
+  // with it as "extraction errors" (Eyra review R03).
+  extraction_errors?: Record<string, number>
 }
 
 export interface PropsUIPromptConsentFormViz {
@@ -25,6 +28,10 @@ export interface PropsUIPromptConsentFormViz {
   donateButton?: Text
   helpButton?: Text
   helpText?: Text
+  // Highlighted notice above the tables, e.g. that some data could not be read.
+  notice?: Text | null
+  // Largest donation part in bytes; each part is its own request to the host.
+  donatePartBytes?: number | null
   tables: PropsUIPromptConsentFormTableViz[]
 }
 
@@ -44,6 +51,7 @@ export interface TableContext {
   headers?: Record<string, string>
   folded: boolean
   deleteOption: boolean
+  extractionErrors: Record<string, number>
 }
 
 export type TableWithContext = TableContext & PropsUITable

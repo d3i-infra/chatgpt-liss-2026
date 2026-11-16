@@ -12,22 +12,19 @@ class CommandUIRender:
 
 
 class CommandSystemDonate:
-    __slots__ = "key", "json_string", "staged_id"
+    # json_string: the donation as a str, or the JsProxy of the UTF-8 bytes the
+    # consent page donated (passed through to the page as the same JS object).
+    __slots__ = "key", "json_string"
 
-    def __init__(self, key, json_string, staged_id=None):
+    def __init__(self, key, json_string):
         self.key = key
         self.json_string = json_string
-        # Id of a donation the UI staged; the page's CommandRouter substitutes
-        # the data, so json_string stays empty and the data never enters Python.
-        self.staged_id = staged_id
 
     def toDict(self):
         dict = {}
         dict["__type__"] = "CommandSystemDonate"
         dict["key"] = self.key
         dict["json_string"] = self.json_string
-        if self.staged_id is not None:
-            dict["staged_id"] = self.staged_id
         return dict
 
 

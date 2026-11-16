@@ -188,7 +188,11 @@ def run_extraction(reader, errors: Counter, config: list[TableConfig]) -> Extrac
     """
     tables = []
     for table_cfg in config:
+        before = Counter(errors)
         df = table_cfg.extractor(reader, errors, **table_cfg.extractor_kwargs)
+        # This extractor's own error counts travel with its table and are
+        # donated with it (e.g. skipped messages; Eyra review R03).
+        table_errors = errors - before
         if table_cfg.variables is not None:
             df = df[[c for c in table_cfg.variables if c in df.columns]]
         table = d3i_props.PropsUIPromptConsentFormTableViz(
@@ -198,6 +202,7 @@ def run_extraction(reader, errors: Counter, config: list[TableConfig]) -> Extrac
             description=table_cfg.description,
             headers=table_cfg.headers,
             visualizations=table_cfg.visualizations if table_cfg.visualizations else None,
+            extraction_errors=dict(table_errors),
         )
         tables.append(table)
 

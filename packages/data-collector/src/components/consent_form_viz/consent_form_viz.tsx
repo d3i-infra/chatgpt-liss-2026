@@ -1,9 +1,9 @@
 import {
   DonateButtons,
   ReactFactoryContext,
-  stageDonation,
 } from "@eyra/feldspar"
 import { loadDataFrame } from "./load_data_frame"
+import { serializedTable } from "./serialized_table"
 import TextBundle from "@eyra/feldspar"
 import { resolveText } from "../../locale/text"
 import { 
@@ -19,6 +19,8 @@ import {
 import { useCallback, useEffect, useRef, useState, ReactElement } from "react"
 import _ from "lodash"
 import { TableContainer } from "./table_container"
+import { encodeJsonParts, DEFAULT_DONATE_PART_BYTES } from "./donation_parts"
+import { claimOnce } from "./settle_once"
 
 type Props = PropsUIPromptConsentFormViz & ReactFactoryContext
 
@@ -102,12 +104,13 @@ export const ConsentFormViz = (props: Props): ReactElement => {
       headers: translatedHeaders,
       folded: tableData.folded || false,
       deleteOption: tableData.delete_option,
+      extractionErrors: tableData.extraction_errors ?? {},
     }
   }
 
   const [tables, setTables] = useState<TableWithContext[]>(() => parseTables(props.tables))
   const { locale, resolve } = props
-  const { description, helpButton, helpText } = prepareCopy(props)
+  const { description, helpButton, helpText, notice } = prepareCopy(props)
   const [showHelp, setShowHelp] = useState(false)
   // The state initializer above already parsed props.tables; only re-parse
   // when the host actually sends new tables (issue #122 double parse).
@@ -131,21 +134,22 @@ export const ConsentFormViz = (props: Props): ReactElement => {
     })
   }, [])
 
+  // Set by the first Donate or Cancel: the page answers the flow once (R07).
+  const answered = useRef(false)
+
   function handleDonate(): void {
-    // Stage the donation here and answer with its id only: the data then goes
-    // straight to the bridge (CommandRouter) instead of through the worker and
-    // Python and back, which cost more memory than any other step.
-    const value = serializeConsentData()
-    resolve?.({ __type__: "PayloadStagedDonation", value: stageDonation(value), size: value.length })
+    if (!claimOnce(answered)) return
+    // The donation as UTF-8 parts of at most donatePartBytes, written without ever
+    // building the whole JSON string: the parts are transferred to the worker, pass
+    // through Python untouched (ADR-0046) and are donated one request each.
+    // Concatenated in order they are exactly the JSON of all tables.
+    const parts = encodeJsonParts(serializeTables(), props.donatePartBytes ?? DEFAULT_DONATE_PART_BYTES)
+    resolve?.({ __type__: "PayloadJSON", value: parts })
   }
 
   function handleCancel(): void {
+    if (!claimOnce(answered)) return
     resolve?.({ __type__: "PayloadFalse", value: false })
-  }
-
-  function serializeConsentData(): string {
-    const array = serializeTables()
-    return JSON.stringify(array)
   }
 
   function serializeTables(): any[] {
@@ -153,9 +157,9 @@ export const ConsentFormViz = (props: Props): ReactElement => {
   }
 
 
-  function serializeTable({ id, head, body: { rows }, deletedRowCount }: TableWithContext): any {
+  function serializeTable({ id, head, body: { rows }, deletedRowCount, extractionErrors }: TableWithContext): any {
     const data = rows.map((row) => serializeRow(row, head))
-    return { [id]: data, "deleted row count": deletedRowCount.toString() }
+    return serializedTable(id, data, deletedRowCount, extractionErrors)
   }
 
   function serializeRow(row: PropsUITableRow, head: PropsUITableHead): any {
@@ -172,6 +176,15 @@ export const ConsentFormViz = (props: Props): ReactElement => {
             {line}
           </span>
         ))}
+        {notice !== "" && (
+          <div role="note" className="bg-warninglight border-l-4 border-warning p-4 mt-2 mb-4">
+            {notice.split("\n").map((line, index) => (
+              <span className="block text-bodymedium font-body" key={"notice" + String(index)}>
+                {line}
+              </span>
+            ))}
+          </div>
+        )}
         <div className="mt-2 mb-6">
           <button
             type="button"
@@ -222,13 +235,15 @@ interface Copy {
   description: string
   helpButton: string
   helpText: string
+  notice: string
 }
 
-function prepareCopy({ description, helpButton, helpText, locale }: Props): Copy {
+function prepareCopy({ description, helpButton, helpText, notice, locale }: Props): Copy {
   return {
     description: resolveText(description ?? defaultDescription, locale),
     helpButton: resolveText(helpButton ?? defaultHelpButtonLabel, locale),
     helpText: resolveText(helpText ?? defaultHelpText, locale),
+    notice: notice != null ? resolveText(notice, locale) : "",
   }
 }
 

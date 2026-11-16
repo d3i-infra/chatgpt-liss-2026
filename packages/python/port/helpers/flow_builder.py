@@ -16,6 +16,7 @@ import port.api.props as props
 import port.api.d3i_props as d3i_props
 from port.api.file_utils import SeekableBinaryReader
 import port.helpers.port_helpers as ph
+import port.helpers.size_cap as size_cap
 import port.helpers.validate as validate
 import port.helpers.uploads as uploads
 from port.helpers.archive_set import ArchiveSet
@@ -48,6 +49,8 @@ class TaskIncompleteError(Exception):
         self.exit_info = exit_info
 
 
+
+
 class FlowBuilder:
     # Subclasses handling a Google-Takeout-style chunked export set this to
     # "PayloadFiles"; the file prompt, safety check, and archive-set
@@ -75,6 +78,13 @@ class FlowBuilder:
                 "de": f"Überprüfen Sie Ihre {self.platform_name}-Daten",
                 "it": f"Esamini i suoi dati di {self.platform_name}",
                 "es": f"Revise sus datos de {self.platform_name}",
+            }),
+            "unreadable_header": props.Translatable({
+                "en": "File could not be read",
+                "nl": "Bestand kon niet worden gelezen",
+                "de": "Datei konnte nicht gelesen werden",
+                "it": "Impossibile leggere il file",
+                "es": "No se ha podido leer el archivo",
             }),
             "retry_header": props.Translatable({
                 "en": "Try again",
@@ -234,16 +244,25 @@ class FlowBuilder:
                 yield from ph.emit_log("info", f"[{self.platform_name}] Extraction complete: {len(result.tables)} tables, {total_rows} rows; errors: none")
 
             # 7. If no tables → no-data page (clean empties only: zero tables
-            # WITH extraction errors is an extraction failure, never presented
-            # as "no data found" — the no-data/extraction-bug separation in
-            # the no-data ADR. Raising routes it through the consent-gated
-            # error flow, so the participant stays pending.)
+            # WITH extraction errors means the file could not be read, never
+            # "no data found" — the no-data/extraction-bug separation in
+            # ADR-0019). An unreadable file gets its own retry page so the
+            # participant can choose another file; the error counts already
+            # went to the host in the PII-free summary above.
             if not result.tables:
                 if result.errors:
-                    raise RuntimeError(
-                        f"Extraction produced no tables with errors: "
-                        f"{', '.join(f'{k}×{v}' for k, v in result.errors.items())}"
-                    )
+                    logger.info("Unreadable %s file; prompting retry", self.platform_name)
+                    # Running out of memory is not a damaged file (Eyra review R01).
+                    out_of_memory = result.errors.get("MemoryError", 0) > 0
+                    del result, raw_result
+                    if out_of_memory:
+                        prompt, header = ph.generate_too_large_prompt(self.platform_name), ph.TOO_LARGE_HEADER
+                    else:
+                        prompt, header = self.generate_unreadable_file_prompt(), self.UI_TEXT["unreadable_header"]
+                    if (yield from self._prompt_retry(prompt, header)):
+                        continue  # loop back to step 1
+                    yield from ph.emit_log("info", f"[{self.platform_name}] Retry declined")
+                    raise TaskIncompleteError("abandoned")
                 logger.info("No data extracted for %s", self.platform_name)
                 _ = yield ph.render_no_data_page(self.platform_name)
                 return
@@ -252,7 +271,13 @@ class FlowBuilder:
 
         # 8. Render consent form
         yield from ph.emit_log("info", f"[{self.platform_name}] Consent form shown")
-        review_page = [ph.render_page(self.UI_TEXT["review_data_header"], self.generate_review_data_prompt(result.tables))]
+        review_prompt = self.generate_review_data_prompt(result.tables)
+        # Tell the participant before review what could not be read (Eyra
+        # review R03); the same counts are donated with each table.
+        large = size_cap.estimated_donation_bytes(result.tables) >= ph.LARGE_DONATION_FRACTION * size_cap.donation_budget_bytes()
+        review_prompt.notice = ph.review_notice(result.errors, large_donation=large)
+        review_page = [ph.render_page(self.UI_TEXT["review_data_header"], review_prompt)]
+        del review_prompt  # only review_page may reference the tables (see below)
         # Hold no reference to the extracted tables while suspended here: the
         # donation arrives as this yield's value and is allocated in Pyodide's
         # memory, which never shrinks, so free the tables first and let it
@@ -262,55 +287,82 @@ class FlowBuilder:
         consent_result = yield review_page.pop()
 
         # 9. Donate with per-platform key
-        donate_key = f"{self.session_id}-{self.platform_name.lower()}"
-        if consent_result.__type__ == "PayloadStagedDonation":
-            # The page staged the reviewed data; only its id comes here, and the
-            # page sends the data to the host itself.
-            donate_command = ph.donate_staged(donate_key, consent_result.value)
-            payload_size = consent_result.size
-            yield from ph.emit_log("info", f"[{self.platform_name}] Consent: accepted")
-        elif consent_result.__type__ == "PayloadJSON":
-            donate_command = ph.donate(donate_key, consent_result.value)
-            payload_size = len(consent_result.value)
+        if consent_result.__type__ == "PayloadJSON":
+            # A str, or the JsProxy of the UTF-8 bytes the consent-viz page donates.
+            # The bytes are never converted here: they go back to the page as the
+            # same JS object, and Pyodide's str conversions of a large donation cost
+            # hundreds of MB (ADR-0046).
+            reviewed_data = consent_result.value
             yield from ph.emit_log("info", f"[{self.platform_name}] Consent: accepted")
         elif consent_result.__type__ == "PayloadFalse":
             reviewed_data = json.dumps({"status": "data_submission declined"})
-            donate_command = ph.donate(donate_key, reviewed_data)
-            payload_size = len(reviewed_data)
             yield from ph.emit_log("info", f"[{self.platform_name}] Consent: declined")
         else:
             return
 
+        donate_key = f"{self.session_id}-{self.platform_name.lower()}"
         is_decline = consent_result.__type__ == "PayloadFalse"
-        yield from ph.emit_log("info", f"[{self.platform_name}] Donation started: payload size={payload_size} bytes")
-        donate_result = yield donate_command
-
-        # 11. Inspect donate result
-        # For declines, don't show failure UI — the participant chose not to donate,
-        # so a failure to record that decision is invisible infrastructure, not their problem.
-        if not ph.handle_donate_result(donate_result):
-            if is_decline:
-                logger.warning("Decline status donation failed for %s (silent)", self.platform_name)
-                yield from ph.emit_log("info", f"[{self.platform_name}] Donation result: decline record failed (silent)")
-                return
-            logger.error("Donation failed for %s", self.platform_name)
-            yield from ph.emit_log("info", f"[{self.platform_name}] Donation result: failed")
-            _ = yield ph.render_donate_failure_page(self.platform_name)
-            raise TaskIncompleteError("donation_failed")
+        # The reviewed data is sent in parts of at most DONATE_PART_BYTES (the consent
+        # page writes them; anything else is split here), each under its own key
+        # (<key>_part<i>of<n>); a single part keeps the plain key. Concatenated in
+        # part order they are exactly the donation.
+        if is_decline:
+            total, parts = 1, iter([reviewed_data])
+        else:
+            total, parts = ph.donation_parts(reviewed_data)
+        size = ph.donation_size(reviewed_data)
+        del reviewed_data  # each part is released once it has been sent
+        yield from ph.emit_log("info", f"[{self.platform_name}] Donation started: payload size={size} bytes, parts={total}")
+        for part, chunk in enumerate(parts, start=1):
+            key = ph.donation_part_key(donate_key, part, total)
+            if not is_decline:
+                _ = yield ph.render_donation_progress_page(self.platform_name, part, total)
+            attempt = 0
+            while True:
+                attempt += 1
+                # A copy goes out; the part stays here until the host confirms it.
+                donate_result = yield ph.donate(key, ph.sendable_copy(chunk))
+                # 11. Inspect donate result
+                if ph.handle_donate_result(donate_result):
+                    break
+                # For declines, don't show failure UI — the participant chose not to donate,
+                # so a failure to record that decision is invisible infrastructure, not their problem.
+                if is_decline:
+                    logger.warning("Decline status donation failed for %s (silent)", self.platform_name)
+                    yield from ph.emit_log("info", f"[{self.platform_name}] Donation result: decline record failed (silent)")
+                    return
+                logger.error("Donation failed for %s (part %d of %d, attempt %d)", self.platform_name, part, total, attempt)
+                yield from ph.emit_log("info", f"[{self.platform_name}] Donation part {part} of {total}: failed (attempt {attempt})")
+                if attempt == 1:
+                    continue  # one automatic retry, for a brief network problem
+                # Then the participant decides: try this part again, or stop.
+                choice = yield ph.render_donation_retry_page(self.platform_name, part, total)
+                if getattr(choice, "__type__", None) == "PayloadTrue":
+                    _ = yield ph.render_donation_progress_page(self.platform_name, part, total)
+                    continue
+                yield from ph.emit_log("info", f"[{self.platform_name}] Donation result: failed at part {part} of {total}")
+                _ = yield ph.render_donate_failure_page(self.platform_name)
+                raise TaskIncompleteError("donation_failed")
+            del chunk
+            if total > 1:
+                yield from ph.emit_log("info", f"[{self.platform_name}] Donation part {part} of {total}: success")
 
         yield from ph.emit_log("info", f"[{self.platform_name}] Donation result: success")
 
-    def _prompt_retry(self):
-        """Render the retry prompt and report the participant's choice.
+    def _prompt_retry(self, prompt=None, header=None):
+        """Render a retry prompt and report the participant's choice.
 
         Generator helper: `yield from` it to get back True (retry — caller
         should `continue`) or False (declined — caller should raise
         TaskIncompleteError("abandoned"), since a declined retry is not a
         completion; ADR-0039). Shared by the invalid-file path and the
-        corrupt-archive-set path, which both fall back to the same retry UI.
+        corrupt-archive-set path, which both fall back to the default retry
+        UI, and by the unreadable-file path, which passes its own prompt and
+        header.
         """
-        retry_prompt = self.generate_retry_prompt()
-        retry_result = yield ph.render_page(self.UI_TEXT["retry_header"], retry_prompt)
+        retry_prompt = prompt if prompt is not None else self.generate_retry_prompt()
+        retry_header = header if header is not None else self.UI_TEXT["retry_header"]
+        retry_result = yield ph.render_page(retry_header, retry_prompt)
         return retry_result.__type__ == "PayloadTrue"
 
     # Methods to be overridden by platform-specific implementations
@@ -354,6 +406,13 @@ class FlowBuilder:
         copy telling the participant to select ALL the files again.
         """
         return ph.generate_retry_prompt(
+            self.platform_name, multiple=self.expected_file_payload == "PayloadFiles"
+        )
+
+    def generate_unreadable_file_prompt(self):
+        """Generate the prompt for a file that could not be read (zero tables
+        with extraction errors). Mirrors generate_retry_prompt's `multiple=`."""
+        return ph.generate_unreadable_file_prompt(
             self.platform_name, multiple=self.expected_file_payload == "PayloadFiles"
         )
 

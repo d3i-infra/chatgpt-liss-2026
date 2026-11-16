@@ -69,6 +69,7 @@ function visualizationColumns (visualization: VisualizationType): string[] | typ
     for (const column of [
       conversation.modelColumn,
       conversation.timestampColumn,
+      conversation.unreadableTimestampColumn,
       conversation.titleColumn,
       conversation.referencesColumn,
       conversation.sourcesColumn,

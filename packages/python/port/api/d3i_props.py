@@ -6,6 +6,13 @@ import pandas as pd
 
 import port.api.props as props
 
+#: Largest part of a donation, in bytes. The consent page writes the donation in
+#: parts of at most this size and each part is sent as its own request, so the
+#: whole donation never exists in one piece in the browser (Eyra review R01/R02).
+#: 25 MB was measured to keep donating flat on an 8 GB laptop and is far below
+#: Next's 210 MB request limit.
+DONATE_PART_BYTES = 25_000_000
+
 @dataclass
 class PropsUIPromptConsentFormTableViz:
     """
@@ -19,6 +26,8 @@ class PropsUIPromptConsentFormTableViz:
         visualizations (Optional[list]): Optional visualizations to be shown.
         folded (Optional[bool]): Whether the table should be initially folded.
         delete_option (Optional[bool]): Whether to show a delete option for the table.
+        extraction_errors (dict[str, int]): Error counts from extracting this table, e.g. skipped
+            messages. Donated with the table as "extraction errors" (Eyra review R03).
 
     Examples::
 
@@ -60,6 +69,7 @@ class PropsUIPromptConsentFormTableViz:
     headers: Optional[dict[str, props.Translatable]] = None
     folded: Optional[bool] = False
     delete_option: Optional[bool] = True
+    extraction_errors: dict[str, int] = field(default_factory=dict)
 
     def translate_data_frame(self):
         # UTF-8 bytes rather than a str: toJs turns bytes into a standalone
@@ -90,6 +100,7 @@ class PropsUIPromptConsentFormTableViz:
             dict["headers"] = {key: value.toDict() for key, value in self.headers.items()}
         dict["folded"] = self.folded
         dict["delete_option"] = self.delete_option
+        dict["extraction_errors"] = {key: int(n) for key, n in self.extraction_errors.items()}
         return dict
 
 
@@ -104,11 +115,15 @@ class PropsUIPromptConsentFormViz:
         description (Optional[Translatable]): Optional description of the consent form.
         donate_question (Optional[Translatable]): Optional donation question.
         donate_button (Optional[Translatable]): Optional text for the donate button.
+        notice (Optional[Translatable]): Optional highlighted notice, e.g. that some data could not be read.
+        donate_part_bytes (int): Largest donation part in bytes (see DONATE_PART_BYTES).
     """
     tables: list[PropsUIPromptConsentFormTableViz]
     description: Optional[props.Translatable] = None
     donate_question: Optional[props.Translatable] = None
     donate_button: Optional[props.Translatable] = None
+    notice: Optional[props.Translatable] = None
+    donate_part_bytes: int = DONATE_PART_BYTES
 
     def translate_tables(self):
         """
@@ -135,6 +150,8 @@ class PropsUIPromptConsentFormViz:
         dict["description"] = self.description and self.description.toDict()
         dict["donateQuestion"] = self.donate_question and self.donate_question.toDict()
         dict["donateButton"] = self.donate_button and self.donate_button.toDict()
+        dict["notice"] = self.notice and self.notice.toDict()
+        dict["donatePartBytes"] = self.donate_part_bytes
         return dict
 
 
@@ -305,6 +322,51 @@ class PropsUIPromptRetry:
         dict["__type__"] = "PropsUIPromptRetry"
         dict["text"] = self.text.toDict()
         dict["ok"] = self.ok.toDict()
+        return dict
+
+
+@dataclass
+class PropsUIPromptTechnicalDetails:
+    """Collapsed section with technical details, such as a traceback.
+
+    Keeps diagnostics off the participant-facing message while letting the
+    participant open and read them, e.g. before deciding whether to send an
+    error report that contains them (ADR-0022).
+
+    Attributes:
+        summary: label of the collapsed section
+        details: preformatted text shown when the section is opened
+    """
+
+    summary: props.Translatable
+    details: str
+
+    def toDict(self):
+        dict = {}
+        dict["__type__"] = "PropsUIPromptTechnicalDetails"
+        dict["summary"] = self.summary.toDict()
+        dict["details"] = self.details
+        return dict
+
+
+@dataclass
+class PropsUIPromptProgress:
+    """Message shown while the flow works, e.g. sends a donation in parts.
+
+    The page answers with PayloadVoid as soon as it is shown, so the flow can
+    carry on (donate the next part) while the message stays on screen until
+    the next render.
+
+    Attributes:
+        text: message to display
+    """
+
+    text: props.Translatable
+
+    def toDict(self):
+        dict = {}
+        dict["__type__"] = "PropsUIPromptProgress"
+        dict["text"] = self.text.toDict()
         return dict
 
 

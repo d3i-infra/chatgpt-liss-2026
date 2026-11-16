@@ -49,6 +49,8 @@ from port.helpers.table_extractor import (
     run_extraction,
 )
 import port.helpers.redact as redact
+import port.helpers.port_helpers as ph
+import port.helpers.size_cap as size_cap
 
 logger = logging.getLogger(__name__)
 
@@ -108,7 +110,7 @@ def conversations_to_df(reader: ZipArchiveReader, errors: Counter) -> pd.DataFra
     Returns
     -------
     pd.DataFrame
-        Columns: ``conversation title``, ``role``, ``message``, ``content type``, ``model``, ``time``, ``message id``, ``reaction to``, ``hidden``, ``content references``, ``search_result_groups``.
+        Columns: ``conversation title``, ``role``, ``message``, ``content type``, ``model``, ``time``, ``unreadable time``, ``message id``, ``reaction to``, ``hidden``, ``content references``, ``search_result_groups``.
         Empty DataFrame when the file is absent or parsing fails.
 
     Table documentation::
@@ -122,7 +124,8 @@ def conversations_to_df(reader: ZipArchiveReader, errors: Counter) -> pd.DataFra
             "message": "Full text of the message.",
             "content type": "The content type of the message, e.g. 'text', 'multimodal_text', 'thoughts', or 'reasoning_recap'.",
             "model": "ChatGPT model slug used to generate the assistant reply.",
-            "time": "ISO 8601 timestamp of when the message was created.",
+            "time": "ISO 8601 timestamp of when the message was created. Empty when the export has no time, or when its value could not be read as a time (see unreadable time).",
+            "unreadable time": "The original creation-time value from the export when it could not be read as a time; empty otherwise. Rows with a value here have an empty time.",
             "message id": "A unique identifier for the message.",
             "reaction to": "The id of the message this message reacts to. ``client-created-root`` indicates the first message in the chat.",
             "hidden": "True when ChatGPT doesn't show the message in the conversation: it is on another branch than the one currently shown, e.g. an earlier version of a regenerated reply, a reply to an edited prompt, or the reply not picked when two were compared. False when shown, or when the export doesn't say which branch is shown.",
@@ -151,6 +154,7 @@ def conversations_to_df(reader: ZipArchiveReader, errors: Counter) -> pd.DataFra
             "content type": {"en": "Content type", "nl": "Inhoudstype"},
             "model": {"en": "Model", "nl": "Model"},
             "time": {"en": "Time", "nl": "Tijd"},
+            "unreadable time": {"en": "Unreadable time", "nl": "Onleesbare tijd"},
             "message id": {"en": "ID", "nl": "ID"},
             "reaction to": {"en": "Reaction to", "nl": "Reactie op"},
             "hidden": {"en": "Hidden", "nl": "Verborgen"},
@@ -168,6 +172,7 @@ def conversations_to_df(reader: ZipArchiveReader, errors: Counter) -> pd.DataFra
               "messageColumn": "message",
               "modelColumn": "model",
               "timestampColumn": "time",
+              "unreadableTimestampColumn": "unreadable time",
               "titleColumn": "conversation title",
               "referencesColumn": "content references",
               "sourcesColumn": "search_result_groups",
@@ -180,84 +185,159 @@ def conversations_to_df(reader: ZipArchiveReader, errors: Counter) -> pd.DataFra
           ]
         }
     """
-    results = reader.json_all(r"^conversations.*\.json")
-    if not results:
+    # One part at a time: each parsed part is dropped as soon as its rows are
+    # taken, so Python holds the rows plus a single part rather than every
+    # parsed part of a large export at once (Eyra review R01).
+    #
+    # Problems are handled at the smallest level that contains them, so one
+    # malformed item never costs the participant the rest of their data
+    # (Eyra review R03). Each skip is counted under a SKIPPED_* key: the
+    # participant is told before review, and the counts are donated with the
+    # table (see FlowBuilder and run_extraction).
+    # Only the most recent conversations that fit the donation budget are kept
+    # (ADR-0048); what is left out is counted and shown to the participant.
+    selection = size_cap.RecentFirstSelection(size_cap.donation_budget_bytes())
+    for result in reader.json_each(r"^conversations.*\.json"):
+        part = result.data
+        del result
+        if not isinstance(part, list):
+            # Unreadable part (invalid JSON, read failure) or not a
+            # conversations list at all.
+            errors[SKIPPED_FILE] += 1
+            del part
+            continue
+        _add_part_rows(part, selection, errors)
+        del part  # release this part before the next is parsed
+
+    selection.count_into(errors)
+    datapoints = selection.rows()
+    del selection
+    if not datapoints:
         return pd.DataFrame()
-    conversations = [conv for result in results for conv in result.data]
+    return pd.DataFrame(datapoints)
 
-    datapoints = []
-    out = pd.DataFrame()
 
-    try:
-        for conversation in conversations:
-            title = conversation.get("title", "<no title>")
-            if not isinstance(conversation.get("mapping"), dict):
-                continue #not a valid conversation file, skip it
-            shown_ids = shown_message_ids(conversation)
-            for id, turn in conversation["mapping"].items():
+def _add_part_rows(part: list, selection: "size_cap.RecentFirstSelection", errors: Counter) -> None:
+    """Offer the rows of every readable conversation in one conversations part."""
+    for conversation in part:
+        try:
+            selection.offer(conversation_rows(conversation, errors))
+        except Exception as e:
+            logger.error("Skipped a conversation: %s", type(e).__name__)
+            errors[SKIPPED_CONVERSATION] += 1
 
-                if isinstance(turn.get('message'), dict):
-                    content_references = []
-                    if isinstance(turn['message'].get('metadata'), dict):
-                        content_references = turn['message']['metadata'].get('content_references', [])
-                
-                    search_result_groups = []
-                    if isinstance(turn['message'].get('metadata'), dict):
-                        search_result_groups = turn['message']['metadata'].get('search_result_groups', [])
 
-                    message = ""
-                    content_type = ""
-                    if isinstance(turn['message'].get('content'), dict):
-                        content_type = turn['message']['content'].get('content_type', '')
-                        if content_type == 'text':
-                            message = turn['message']['content'].get('parts', '')
-                        elif content_type == 'multimodal_text':
-                            # parts mixes plain strings with dicts (image/audio
-                            # asset pointers, audio transcriptions); keep the text.
-                            parts = turn['message']['content'].get('parts', [])
-                            message = [
-                                part if isinstance(part, str) else part.get('text')
-                                for part in parts
-                                if isinstance(part, (str, dict))
-                            ]
-                        elif content_type == 'thoughts':
-                            message = turn['message']['content'].get('thoughts', {})
-                            message = [thought.get('summary') for thought in message if 'summary' in thought]
-                        elif content_type == 'reasoning_recap':
-                            message = turn['message']['content'].get('content', '')
-                        else:
-                            message = "[Unhandled content type: " + str(content_type) + ']'
-                        if isinstance(message, list):
-                            message = " ".join(part for part in message if isinstance(part, str))
+#: Error-counter keys for data left out because it could not be read. Kept in
+#: port_helpers so FlowBuilder can name them in the participant notice.
+SKIPPED_FILE = ph.SKIPPED_FILE
+SKIPPED_CONVERSATION = ph.SKIPPED_CONVERSATION
+SKIPPED_MESSAGE = ph.SKIPPED_MESSAGE
 
-                    denested_d = eh.dict_denester(turn)
-                    role = eh.find_item(denested_d, "role")
-                    model = eh.find_item(denested_d, "-model_slug")
-                    reaction_to = eh.find_item(denested_d, "parent")
-                    time = eh.epoch_to_iso(eh.find_item(denested_d, "create_time"), errors=errors)
-                    datapoint = {
-                        "conversation title": title,
-                        "role": role,
-                        "message": redact.redact(message),
-                        "content type": content_type,
-                        "model": model,
-                        "time": time,
-                        "message id": id,
-                        "reaction to": reaction_to,
-                        "hidden": shown_ids is not None and id not in shown_ids,
-                        "content references": redact.redact_json(content_references),
-                        "search_result_groups": redact.redact_json(search_result_groups),
-                    }
-                    if role != "":
-                        datapoints.append(datapoint)
 
-        out = pd.DataFrame(datapoints)
+def conversation_rows(conversation, errors: Counter) -> list[dict]:
+    """Rows for every message in one conversation.
 
-    except Exception as e:
-        logger.error("Data extraction error: %s", e)
-        errors[type(e).__name__] += 1
+    A conversation without a ``mapping`` dict is skipped and counted; a
+    message that fails is skipped and counted on its own.
+    """
+    if not isinstance(conversation, dict) or not isinstance(conversation.get("mapping"), dict):
+        errors[SKIPPED_CONVERSATION] += 1
+        return []
+    title = conversation.get("title", "<no title>")
+    shown_ids = shown_message_ids(conversation)
 
-    return out
+    rows = []
+    for id, turn in conversation["mapping"].items():
+        if not isinstance(turn, dict):
+            errors[SKIPPED_MESSAGE] += 1
+            continue
+        if not isinstance(turn.get("message"), dict):
+            continue  # structural node (e.g. the root), not a message
+        try:
+            row = message_row(id, turn, title, shown_ids, errors)
+        except Exception as e:
+            logger.error("Skipped a message: %s", type(e).__name__)
+            errors[SKIPPED_MESSAGE] += 1
+            continue
+        if row["role"] != "":
+            rows.append(row)
+    return rows
+
+
+def message_row(id, turn: dict, title, shown_ids: set[str] | None, errors: Counter) -> dict:
+    """One table row for a mapping entry whose ``message`` is a dict."""
+    message = turn["message"]
+    metadata = message.get("metadata")
+    if not isinstance(metadata, dict):
+        metadata = {}
+    content_type, text = message_text(message.get("content"))
+
+    denested_d = eh.dict_denester(turn)
+    role = eh.find_item(denested_d, "role")
+    # Read from the message itself: a null time is absent (not unreadable),
+    # and a message without one must not borrow a nested create_time.
+    raw_time = message.get("create_time")
+    if raw_time is None:
+        raw_time = ""
+    time = eh.epoch_to_iso(raw_time, errors=errors, keep_invalid=False)
+    return {
+        "conversation title": title,
+        "role": role,
+        "message": redact.redact(text),
+        "content type": content_type,
+        "model": eh.find_item(denested_d, "-model_slug"),
+        "time": time,
+        # The original value when it could not be read as a time (Eyra review
+        # R05): "time" stays ISO 8601 or empty, and nothing is lost.
+        "unreadable time": str(raw_time) if time == "" and raw_time not in ("", None) else "",
+        "message id": id,
+        "reaction to": eh.find_item(denested_d, "parent"),
+        "hidden": shown_ids is not None and id not in shown_ids,
+        "content references": redact.redact_json(metadata.get("content_references", [])),
+        "search_result_groups": redact.redact_json(metadata.get("search_result_groups", [])),
+    }
+
+
+def message_text(content) -> tuple[str, str]:
+    """Return ``(content type, text)`` for a message's ``content``.
+
+    Always returns strings: a missing or ``null`` field gives empty text
+    rather than an error, since the export simply holds no text there.
+    """
+    if not isinstance(content, dict):
+        return "", ""
+    content_type = content.get("content_type", "")
+    if not isinstance(content_type, str):
+        content_type = str(content_type)
+
+    if content_type == "text":
+        return content_type, _join_text(content.get("parts"))
+    if content_type == "multimodal_text":
+        # parts mixes plain strings with dicts (image/audio asset pointers,
+        # audio transcriptions); keep the text.
+        parts = content.get("parts")
+        parts = parts if isinstance(parts, list) else []
+        return content_type, _join_text([
+            part.get("text") if isinstance(part, dict) else part for part in parts
+        ])
+    if content_type == "thoughts":
+        thoughts = content.get("thoughts")
+        thoughts = thoughts if isinstance(thoughts, list) else []
+        return content_type, _join_text([
+            thought.get("summary") for thought in thoughts if isinstance(thought, dict)
+        ])
+    if content_type == "reasoning_recap":
+        return content_type, _join_text(content.get("content"))
+    return content_type, "[Unhandled content type: " + content_type + "]"
+
+
+def _join_text(value) -> str:
+    """Text from a string or a list of parts; non-text parts are left out."""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        return " ".join(part for part in value if isinstance(part, str))
+    return ""
 
 
 # ---------------------------------------------------------------------------

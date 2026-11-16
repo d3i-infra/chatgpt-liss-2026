@@ -54,3 +54,13 @@ def test_missing_locale_defaults_en(recording_process):
     assert recording_process[0] == ("abc123", "example")
     assert wrapper.platform == "example"
     assert ui_locale.get_ui_locale() == "en"
+
+
+def test_restart_factory_starts_a_fresh_process(recording_process):
+    """'Try again' after an error (Eyra review R04) restarts the study with
+    the same session and platform."""
+    wrapper = start({"sessionId": "abc123", "platform": "example", "locale": "en"})
+
+    assert wrapper._restart is not None
+    wrapper._restart()
+    assert recording_process == [("abc123", "example"), ("abc123", "example")]

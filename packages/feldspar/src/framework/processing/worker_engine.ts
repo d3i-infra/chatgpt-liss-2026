@@ -41,6 +41,7 @@ export default class WorkerProcessingEngine {
         lineno: error.lineno,
         colno: error.colno,
       })
+      this.showFailure('other', String(error.message ?? ''))
     }
   }
 
@@ -63,6 +64,11 @@ export default class WorkerProcessingEngine {
         this.resolveInitialized()
         break
 
+      case 'initialiseFailed':
+        this.logger?.log('error', 'Worker initialisation failed')
+        this.showFailure('start', String(event.data.message ?? ''))
+        break
+
       case 'runCycleDone':
         this.logger?.log('debug', 'Worker run cycle done')
         this.handleRunCycle(event.data.scriptEvent)
@@ -81,6 +87,26 @@ export default class WorkerProcessingEngine {
       default:
         this.logger?.log('warn', `Received unsupported worker event: ${eventType}`)
     }
+  }
+
+  private failureShown = false
+
+  // The worker failed outside Python's own error handling (it could not start,
+  // or crashed): tell the participant instead of leaving them on the last page,
+  // and when they choose Stop end the task as incomplete (Eyra review R01;
+  // nonzero exit, ADR-0039). The message stays in the page's collapsed details.
+  showFailure (reason: 'start' | 'other', message: string): void {
+    if (this.failureShown) return
+    this.failureShown = true
+    const page = {
+      __type__: 'PropsUIPageDataSubmission',
+      platform: 'error',
+      header: { __type__: 'PropsUIHeader', title: { translations: { en: 'Something went wrong', nl: 'Er is iets misgegaan' } } },
+      body: [{ __type__: 'PropsUIPageError', message, reason }]
+    }
+    this.commandHandler.onCommand({ __type__: 'CommandUIRender', page } as any)
+      .then(async () => await this.commandHandler.onCommand({ __type__: 'CommandSystemExit', code: 1, info: 'Worker error' }))
+      .then(() => {}, () => {})
   }
 
   start (): void {
@@ -116,8 +142,17 @@ export default class WorkerProcessingEngine {
     })
   }
 
+  // A payload carried as a standalone typed array (PayloadJSON bytes from the
+  // consent page) is transferred, not cloned: the mirror of py_worker.js's
+  // transferablesOf. Only the payload's own buffer moves; the echoed command may
+  // hold buffers the page still reads.
   nextRunCycle (response: Response): void {
-    this.worker.postMessage({ eventType: 'nextRunCycle', response })
+    const value = (response.payload as { value?: unknown }).value
+    const candidates = Array.isArray(value) ? value : [value]
+    const transfer = candidates
+      .filter((v): v is ArrayBufferView => ArrayBuffer.isView(v) && v.byteOffset === 0 && v.byteLength === v.buffer.byteLength)
+      .map((v) => v.buffer)
+    this.worker.postMessage({ eventType: 'nextRunCycle', response }, transfer)
   }
 
   terminate(): void {

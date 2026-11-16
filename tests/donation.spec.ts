@@ -53,6 +53,24 @@ test('can submit data', async ({ page }) => {
   expect(submittedData).toEqual(expect.stringContaining("hello_world.txt"));
 });
 
+test('submits once when Donate is activated twice in a row (R07)', async ({ page }) => {
+  await setupTestWithFileUpload(page);
+
+  let submissions = 0;
+  await page.route('/data-submission', async route => {
+    submissions += 1;
+    await route.fulfill({ json: { ok: true } });
+  });
+  // Two activations in the same task, before the spinner can cover the button.
+  await page.getByText('Yes, share for research', { exact: true }).evaluate((el: HTMLElement) => {
+    el.click();
+    el.click();
+  });
+  await expect.poll(() => submissions).toBe(1);
+  await page.waitForTimeout(2000);
+  expect(submissions).toBe(1);
+});
+
 test('can remove rows from submission', async ({ page }) => {
   await setupTestWithFileUpload(page);
 

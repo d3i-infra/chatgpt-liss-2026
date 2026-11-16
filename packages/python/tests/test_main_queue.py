@@ -104,6 +104,9 @@ def test_error_flow_skip_renders_incomplete_page_then_exits_nonzero():
     error_page = wrapper.send(None)
     assert error_page["__type__"] == "CommandUIRender"
 
+    try_again_page = wrapper.send(_Payload("PayloadFalse"))
+    assert "Try again?" in json.dumps(try_again_page)
+
     incomplete_page = wrapper.send(_Payload("PayloadFalse"))
     assert incomplete_page["__type__"] == "CommandUIRender"
     assert incomplete_page["page"]["__type__"] == "PropsUIPageDataSubmission"
@@ -128,7 +131,10 @@ def test_error_flow_report_donates_then_renders_incomplete_page_then_exits_nonze
     assert donate["__type__"] == "CommandSystemDonate"
     assert donate["key"] == "error-report"
 
-    incomplete_page = wrapper.send(_Payload("PayloadVoid"))
+    try_again_page = wrapper.send(_Payload("PayloadVoid"))
+    assert "Try again?" in json.dumps(try_again_page)
+
+    incomplete_page = wrapper.send(_Payload("PayloadFalse"))
     assert incomplete_page["__type__"] == "CommandUIRender"
     assert "could not be completed" in json.dumps(incomplete_page)
 
@@ -143,7 +149,8 @@ def test_error_exit_info_contains_no_exception_text():
     wrapper = _crashing_wrapper()
 
     wrapper.send(None)  # error page
-    wrapper.send(_Payload("PayloadFalse"))  # task-incomplete page
+    wrapper.send(_Payload("PayloadFalse"))  # skip report → try-again page
+    wrapper.send(_Payload("PayloadFalse"))  # stop → task-incomplete page
     exit_command = wrapper.send(_Payload("PayloadTrue"))
 
     assert exit_command["__type__"] == "CommandSystemExit"
@@ -331,3 +338,81 @@ class TestMultiFileIncompleteExits:
         exit_command = wrapper.send(_Payload("PayloadTrue"))
         assert exit_command["__type__"] == "CommandSystemExit"
         assert exit_command["code"] == 4
+
+
+def _body_by_type(page_command: dict, type_name: str) -> list[dict]:
+    return [b for b in page_command["page"]["body"] if b["__type__"] == type_name]
+
+
+def test_error_page_keeps_traceback_out_of_the_message():
+    """Eyra review R04: the participant-facing text is plain language; the
+    traceback sits only in the collapsed technical-details section, where the
+    participant can still read it before consenting to the report (ADR-0022)."""
+    import json
+
+    error_page = _crashing_wrapper().send(None)
+
+    for text in _body_by_type(error_page, "PropsUIPromptText"):
+        assert "Traceback" not in json.dumps(text)
+        assert "test explosion" not in json.dumps(text)
+    [details] = _body_by_type(error_page, "PropsUIPromptTechnicalDetails")
+    assert "Traceback" in details["details"]
+    assert "test explosion" in details["details"]
+
+
+def test_error_flow_try_again_restarts_the_script():
+    """'Try again' after an error starts a fresh script from its first step;
+    no exit is sent, so the run continues."""
+    started = []
+
+    def fresh_script():
+        started.append(True)
+
+        def gen():
+            yield CommandSystemLog("info", "fresh start")
+        return gen()
+
+    def crashing():
+        yield CommandSystemLog("info", "first")
+        raise RuntimeError("test explosion")
+
+    wrapper = ScriptWrapper(crashing(), platform="X", restart=fresh_script)
+    wrapper.send(None)                              # first log
+    wrapper.send(_Payload("PayloadVoid"))           # crash → error page
+    wrapper.send(_Payload("PayloadFalse"))          # skip report → try-again page
+    restarted = wrapper.send(_Payload("PayloadTrue"))  # try again
+
+    assert started == [True]
+    assert restarted["__type__"] == "CommandSystemLog"
+    assert restarted["message"] == "fresh start"
+
+
+def test_error_flow_try_again_after_restart_can_still_fail_and_exit_nonzero():
+    """A restarted script that crashes again gets the error flow again, and
+    stopping there still exits nonzero (ADR-0039)."""
+    def crashing():
+        data = yield
+        raise RuntimeError("test explosion")
+
+    wrapper = ScriptWrapper(crashing(), platform="X", restart=crashing)
+    wrapper.send(None)                      # crash → error page
+    wrapper.send(_Payload("PayloadFalse"))  # skip report → try-again page
+    again = wrapper.send(_Payload("PayloadTrue"))  # restart → crashes again → error page
+    assert _body_by_type(again, "PropsUIPromptTechnicalDetails")
+
+    wrapper.send(_Payload("PayloadFalse"))  # skip report → try-again page
+    wrapper.send(_Payload("PayloadFalse"))  # stop → task-incomplete page
+    exit_command = wrapper.send(_Payload("PayloadTrue"))
+    assert exit_command["__type__"] == "CommandSystemExit"
+    assert exit_command["code"] != 0
+
+
+def test_error_flow_try_again_without_restart_factory_exits_nonzero():
+    """Without a restart factory, 'Try again' cannot restart: the wrapper
+    exits nonzero rather than ever reporting a completion."""
+    wrapper = _crashing_wrapper()
+    wrapper.send(None)
+    wrapper.send(_Payload("PayloadFalse"))
+    exit_command = wrapper.send(_Payload("PayloadTrue"))
+    assert exit_command["__type__"] == "CommandSystemExit"
+    assert exit_command["code"] != 0

@@ -1,4 +1,8 @@
 let pyScript;
+// Set once Python failed outside its own error handling (Eyra review R01): the
+// interpreter may be unusable, so the participant gets an error page with Stop,
+// and the next cycle ends the task as incomplete instead of calling Python again.
+let fatal = false;
 
 console.log("[ProcessingWorker] Worker loaded");
 
@@ -9,9 +13,15 @@ onmessage = (event) => {
   const { eventType } = event.data;
   switch (eventType) {
     case "initialise":
-      initialise().then(() => {
-        self.postMessage({ eventType: "initialiseDone" });
-      });
+      initialise().then(
+        () => self.postMessage({ eventType: "initialiseDone" }),
+        (error) => {
+          // E.g. Pyodide could not be downloaded. The page shows a start-failure
+          // page (WorkerProcessingEngine); no error text leaves the browser.
+          console.error("[ProcessingWorker] Initialisation failed:", error);
+          self.postMessage({ eventType: "initialiseFailed", message: String(error) });
+        }
+      );
       break;
 
     case "firstRunCycle": {
@@ -38,6 +48,15 @@ onmessage = (event) => {
 
 function runCycle(payload) {
   console.log("[ProcessingWorker] runCycle " + (payload && payload.__type__));
+  if (fatal) {
+    // The participant chose Stop on the error page: end the task as incomplete
+    // (nonzero, ADR-0039) with a fixed text.
+    self.postMessage({
+      eventType: "runCycleDone",
+      scriptEvent: { __type__: "CommandSystemExit", code: 1, info: "Worker error" },
+    });
+    return;
+  }
   let scriptEvent;
   try {
     scriptEvent = pyScript.send(payload);
@@ -46,6 +65,7 @@ function runCycle(payload) {
     // as a rendered error page (ADR-0022); never posted as error/log events
     // that would forward unconsented traceback text (ADR-0023).
     console.error("[ProcessingWorker] Error in pyScript.send:", error);
+    fatal = true;
     self.postMessage({
       eventType: "runCycleDone",
       scriptEvent: generateErrorMessage(String(error)),
@@ -65,6 +85,7 @@ function runCycle(payload) {
     self.postMessage({ eventType: "runCycleDone", scriptEvent: event }, transferablesOf(event));
   } catch (error) {
     console.error("[ProcessingWorker] Error in toJs/postMessage:", error);
+    fatal = true;
     self.postMessage({
       eventType: "runCycleDone",
       scriptEvent: generateErrorMessage(String(error)),
@@ -90,7 +111,12 @@ function transferablesOf(value) {
   return [...found];
 }
 
+// The error page for a failure outside Python's own error handling. `reason`
+// selects the explanation: "memory" when the browser ran out of memory,
+// otherwise a general one. The raw message only appears under the page's
+// collapsed technical details, and never leaves the browser.
 function generateErrorMessage(message) {
+  const reason = /memory|MemoryError|OOM/i.test(message) ? "memory" : "other";
   return {
     __type__: "CommandUIRender",
     page: {
@@ -104,6 +130,7 @@ function generateErrorMessage(message) {
         {
           __type__: "PropsUIPageError",
           message: message,
+          reason: reason,
         },
       ],
     },

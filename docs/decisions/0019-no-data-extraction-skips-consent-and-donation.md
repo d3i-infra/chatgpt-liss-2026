@@ -29,6 +29,7 @@ When extraction returns no tables (`not result.tables`), `FlowBuilder.start_flow
 - Build the acknowledgment through `port_helpers.render_no_data_page()`, not an inline page in FlowBuilder or a platform module.
 - `run_extraction()` already drops empty DataFrames from `tables`, so "every table came back empty" and "no tables" are the same case at this check.
 - No-data means a *clean* empty extraction. Zero tables with a nonempty `result.errors` is an extraction failure, not a no-data outcome — do not present it to the participant as "no relevant data was found".
+- That failure case means the file could not be read (e.g. invalid or truncated JSON). It gets its own page, built by `ph.generate_unreadable_file_prompt()`, offering "choose another file" (loop back to the upload prompt) or "stop" (`TaskIncompleteError("abandoned")`). Before 2026-11-16 it raised into the error flow, which showed a traceback without a retry (Eyra code review R04). The error counts reach the host only in the PII-free extraction-summary milestone.
 
 ## Why
 

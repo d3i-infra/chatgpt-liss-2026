@@ -25,6 +25,7 @@ companions:
 - Use the session-platform key for every extraction donation; never donate under plain `session_id`.
 - Treat `{session_id}-{platform_key}` as a downstream data contract; coordinate parser and storage changes before changing the format.
 - The platform segment is a machine key, never UI display text: lowercase, no spaces, no hyphens. Session ids may themselves contain hyphens, so parsers take the platform from the substring after the *final* hyphen — a platform key containing a separator breaks every downstream parser.
+- A donation sent in parts (ADR-0047) appends `_part{i}of{n}` to the key: `{session_id}-{platform_key}_part{i}of{n}`. It has no hyphen, so parsers still find the platform after the final hyphen and strip the suffix; a single part keeps the plain key. This format is agreed with the researchers (2026-11-16), who reassemble with `scripts/donation/reassemble.py`.
 - The consent-gated error report (`error_flow` in `main.py`) donates under its own fixed `error-report` key; it is not an extraction donation and stays outside this scheme.
 
 ## Why

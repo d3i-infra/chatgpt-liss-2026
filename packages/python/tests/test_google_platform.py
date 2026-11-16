@@ -200,9 +200,14 @@ def _payload_files(members: dict[str, str | bytes]):
     return _make_payload("PayloadFiles", value=[_named_part("takeout-1-001.zip", members)])
 
 
+def is_progress_page(cmd) -> bool:
+    """A progress page (e.g. "Sending part 2 of 7") answers by itself, like a log."""
+    return isinstance(cmd, CommandUIRender) and cmd.toDict()["page"]["body"][0]["__type__"] == "PropsUIPromptProgress"
+
+
 def _advance_past_logs(gen, response=None):
     cmd = gen.send(response)
-    while isinstance(cmd, CommandSystemLog):
+    while isinstance(cmd, CommandSystemLog) or is_progress_page(cmd):
         cmd = gen.send(_make_payload("PayloadVoid"))
     return cmd
 

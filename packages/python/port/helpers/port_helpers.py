@@ -1,8 +1,48 @@
 import logging
+from typing import Any, cast
 
 import port.api.d3i_props as d3i_props
 import port.api.props as props
 from port.api.commands import CommandSystemDonate, CommandSystemExit, CommandSystemLog, CommandUIRender
+
+#: Error-counter keys for data left out of the tables because it could not be
+#: read. Extractors count skips under these keys; the participant is told
+#: before review (omitted_data_notice) and the counts are donated with each
+#: table's "extraction errors" (Eyra review R03).
+SKIPPED_FILE = "SkippedFile"
+SKIPPED_CONVERSATION = "SkippedConversation"
+SKIPPED_MESSAGE = "SkippedMessage"
+
+#: Donated with the table when the export was larger than the donation budget
+#: (size_cap.py, ADR-0048): conversations left out and included, the budget in
+#: MB, and the date (YYYYMMDD) from which conversations are included.
+SIZE_CAP_LEFT_OUT = "SizeCapLeftOutConversations"
+SIZE_CAP_INCLUDED = "SizeCapIncludedConversations"
+SIZE_CAP_BUDGET_MB = "SizeCapBudgetMB"
+SIZE_CAP_INCLUDED_FROM = "SizeCapIncludedFrom"
+
+_MONTHS = {
+    "en": ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"],
+    "nl": ["januari", "februari", "maart", "april", "mei", "juni", "juli", "augustus", "september", "oktober", "november", "december"],
+    "de": ["Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember"],
+    "it": ["gennaio", "febbraio", "marzo", "aprile", "maggio", "giugno", "luglio", "agosto", "settembre", "ottobre", "novembre", "dicembre"],
+    "es": ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"],
+}
+
+_SKIPPED_LABELS = {
+    SKIPPED_FILE: {
+        "en": "Files or file parts", "nl": "Bestanden of bestandsdelen", "de": "Dateien oder Dateiteile",
+        "it": "File o parti di file", "es": "Archivos o partes de archivos",
+    },
+    SKIPPED_CONVERSATION: {
+        "en": "Conversations", "nl": "Gesprekken", "de": "Unterhaltungen",
+        "it": "Conversazioni", "es": "Conversaciones",
+    },
+    SKIPPED_MESSAGE: {
+        "en": "Messages", "nl": "Berichten", "de": "Nachrichten",
+        "it": "Messaggi", "es": "Mensajes",
+    },
+}
 
 _logger = logging.getLogger(__name__)
 
@@ -93,6 +133,80 @@ def generate_retry_prompt(platform_name: str, multiple: bool = False) -> props.P
     return props.PropsUIPromptConfirm(text, ok, cancel)
 
 
+TOO_LARGE_HEADER = props.Translatable({
+    "en": "Your file is too large",
+    "nl": "Je bestand is te groot",
+    "de": "Ihre Datei ist zu groß",
+    "it": "Il suo file è troppo grande",
+    "es": "Su archivo es demasiado grande",
+})
+
+
+def generate_too_large_prompt(platform_name: str) -> props.PropsUIPromptConfirm:
+    """Prompt shown when processing ran out of memory (Eyra review R01): the file
+    is not damaged, it is too large for this browser right now. Choose a file
+    again (ok → PayloadTrue) or stop (cancel → PayloadFalse). Fixed copy only."""
+    text = props.Translatable({
+        "en": f"Your {platform_name} file is too large to process in this browser: it ran out of memory. Close other browser tabs and programs and try again, or use a computer with more memory. You can choose a file again, or stop.",
+        "nl": f"Je {platform_name} bestand is te groot om in deze browser te verwerken: het geheugen raakte vol. Sluit andere browsertabbladen en programma's en probeer het opnieuw, of gebruik een computer met meer geheugen. Je kunt opnieuw een bestand kiezen, of stoppen.",
+        "de": f"Ihre {platform_name}-Datei ist zu groß, um in diesem Browser verarbeitet zu werden: Der Speicher ist voll. Schließen Sie andere Browser-Tabs und Programme und versuchen Sie es erneut, oder verwenden Sie einen Computer mit mehr Arbeitsspeicher. Sie können erneut eine Datei auswählen oder abbrechen.",
+        "it": f"Il suo file di {platform_name} è troppo grande per essere elaborato in questo browser: la memoria si è esaurita. Chiuda le altre schede del browser e i programmi e riprovi, oppure usi un computer con più memoria. Può scegliere di nuovo un file oppure interrompere.",
+        "es": f"Su archivo de {platform_name} es demasiado grande para procesarlo en este navegador: se ha agotado la memoria. Cierre las demás pestañas del navegador y los programas e inténtelo de nuevo, o utilice un ordenador con más memoria. Puede volver a elegir un archivo o detenerse.",
+    })
+    ok = props.Translatable({
+        "en": "Choose a file again",
+        "nl": "Opnieuw een bestand kiezen",
+        "de": "Erneut eine Datei auswählen",
+        "it": "Scegli di nuovo un file",
+        "es": "Volver a elegir un archivo",
+    })
+    cancel = props.Translatable({"en": "Stop", "nl": "Stoppen", "de": "Abbrechen", "it": "Interrompi", "es": "Detener"})
+    return props.PropsUIPromptConfirm(text, ok, cancel)
+
+
+def generate_unreadable_file_prompt(platform_name: str, multiple: bool = False) -> props.PropsUIPromptConfirm:
+    """Prompt shown when a valid-looking file yields no data because reading
+    it failed (e.g. a truncated or invalid conversations file).
+
+    Distinct from the no-data acknowledgment (ADR-0019): the participant is
+    told the file could not be read and may choose another file
+    (ok → PayloadTrue) or stop (cancel → PayloadFalse). Fixed copy only — no
+    exception text reaches the page (ADR-0022/0023).
+    """
+    if multiple:
+        text = props.Translatable({
+            "en": f"We could not read the data in your {platform_name} files. The files may be incomplete or damaged. You can choose the files again (for example from a new export), or stop.",
+            "nl": f"We konden de gegevens in je {platform_name} bestanden niet lezen. De bestanden zijn mogelijk onvolledig of beschadigd. Je kunt de bestanden opnieuw kiezen (bijvoorbeeld uit een nieuwe export), of stoppen.",
+            "de": f"Wir konnten die Daten in Ihren {platform_name}-Dateien nicht lesen. Die Dateien sind möglicherweise unvollständig oder beschädigt. Sie können die Dateien erneut auswählen (zum Beispiel aus einem neuen Export) oder abbrechen.",
+            "it": f"Non siamo riusciti a leggere i dati nei suoi file di {platform_name}. I file potrebbero essere incompleti o danneggiati. Può selezionare di nuovo i file (ad esempio da una nuova esportazione) oppure interrompere.",
+            "es": f"No hemos podido leer los datos de sus archivos de {platform_name}. Es posible que los archivos estén incompletos o dañados. Puede volver a seleccionar los archivos (por ejemplo, de una nueva exportación) o detenerse.",
+        })
+        ok = props.Translatable({
+            "en": "Choose files again",
+            "nl": "Bestanden opnieuw kiezen",
+            "de": "Dateien erneut auswählen",
+            "it": "Seleziona di nuovo i file",
+            "es": "Volver a seleccionar archivos",
+        })
+    else:
+        text = props.Translatable({
+            "en": f"We could not read the data in your {platform_name} file. The file may be incomplete or damaged. You can choose another file (for example a new export), or stop.",
+            "nl": f"We konden de gegevens in je {platform_name} bestand niet lezen. Het bestand is mogelijk onvolledig of beschadigd. Je kunt een ander bestand kiezen (bijvoorbeeld een nieuwe export), of stoppen.",
+            "de": f"Wir konnten die Daten in Ihrer {platform_name}-Datei nicht lesen. Die Datei ist möglicherweise unvollständig oder beschädigt. Sie können eine andere Datei auswählen (zum Beispiel einen neuen Export) oder abbrechen.",
+            "it": f"Non siamo riusciti a leggere i dati nel suo file di {platform_name}. Il file potrebbe essere incompleto o danneggiato. Può scegliere un altro file (ad esempio una nuova esportazione) oppure interrompere.",
+            "es": f"No hemos podido leer los datos de su archivo de {platform_name}. Es posible que el archivo esté incompleto o dañado. Puede elegir otro archivo (por ejemplo, una nueva exportación) o detenerse.",
+        })
+        ok = props.Translatable({
+            "en": "Choose another file",
+            "nl": "Ander bestand kiezen",
+            "de": "Andere Datei auswählen",
+            "it": "Scegli un altro file",
+            "es": "Elegir otro archivo",
+        })
+    cancel = props.Translatable({"en": "Stop", "nl": "Stoppen", "de": "Abbrechen", "it": "Interrompi", "es": "Detener"})
+    return props.PropsUIPromptConfirm(text, ok, cancel)
+
+
 def generate_file_prompt(
     extensions: str, multiple: bool = False
 ) -> props.PropsUIPromptFileInput | d3i_props.PropsUIPromptFileInputMultiple:
@@ -153,8 +267,99 @@ def generate_file_prompt(
     return props.PropsUIPromptFileInput(description, extensions)
 
 
+def omitted_data_notice(errors) -> props.Translatable | None:
+    """Plain-language notice listing what could not be read, or None when
+    nothing was skipped. Counts only — never exception or participant text."""
+    counts = [(key, errors.get(key, 0)) for key in _SKIPPED_LABELS]
+    counts = [(key, n) for key, n in counts if n > 0]
+    if not counts:
+        return None
+    intro = {
+        "en": "Not everything in your file could be read. The following could not be read, so it is not shown below and will not be shared:",
+        "nl": "Niet alles in je bestand kon worden gelezen. Het volgende kon niet worden gelezen. Het staat daarom niet hieronder en wordt niet gedeeld:",
+        "de": "Nicht alles in Ihrer Datei konnte gelesen werden. Folgendes konnte nicht gelesen werden und wird daher unten nicht angezeigt und nicht geteilt:",
+        "it": "Non è stato possibile leggere tutto il contenuto del suo file. Quanto segue non è stato letto, quindi non è mostrato qui sotto e non verrà condiviso:",
+        "es": "No se ha podido leer todo el contenido de su archivo. Lo siguiente no se ha podido leer, por lo que no se muestra a continuación y no se compartirá:",
+    }
+    translations = {
+        lang: "\n".join([text] + [f"• {_SKIPPED_LABELS[key][lang]}: {n}" for key, n in counts])
+        for lang, text in intro.items()
+    }
+    return props.Translatable(cast(props.Translations, translations))
+
+
+def _long_date(yyyymmdd: int, lang: str) -> str:
+    year, month, day = yyyymmdd // 10000, yyyymmdd // 100 % 100, yyyymmdd % 100
+    if not 1 <= month <= 12:
+        return str(yyyymmdd)
+    name = _MONTHS[lang][month - 1]
+    return f"{name} {day}, {year}" if lang == "en" else f"{day} {name} {year}"
+
+
+def size_cap_notice(errors) -> props.Translatable | None:
+    """Plain-language notice that only the most recent conversations are included
+    because the export is too large, or None when nothing was left out."""
+    left_out = errors.get(SIZE_CAP_LEFT_OUT, 0)
+    if not left_out:
+        return None
+    included = errors.get(SIZE_CAP_INCLUDED, 0)
+    since = errors.get(SIZE_CAP_INCLUDED_FROM)
+    texts = {}
+    for lang in _MONTHS:
+        date = _long_date(since, lang) if since else None
+        texts[lang] = {
+            "en": f"Your export is too large to share completely. Only your {included} most recent conversations are shown below and can be shared"
+                  + (f" (those with activity on or after {date})" if date else "")
+                  + f". {left_out} older conversations are left out and will not be shared.",
+            "nl": f"Je export is te groot om helemaal te delen. Alleen je {included} meest recente gesprekken staan hieronder en kunnen worden gedeeld"
+                  + (f" (gesprekken met activiteit op of na {date})" if date else "")
+                  + f". {left_out} oudere gesprekken zijn weggelaten en worden niet gedeeld.",
+            "de": f"Ihr Export ist zu groß, um ihn vollständig zu teilen. Nur Ihre {included} neuesten Unterhaltungen werden unten angezeigt und können geteilt werden"
+                  + (f" (mit Aktivität am oder nach dem {date})" if date else "")
+                  + f". {left_out} ältere Unterhaltungen werden weggelassen und nicht geteilt.",
+            "it": f"La sua esportazione è troppo grande per essere condivisa per intero. Qui sotto sono mostrate, e possono essere condivise, solo le sue {included} conversazioni più recenti"
+                  + (f" (con attività dal {date} in poi)" if date else "")
+                  + f". {left_out} conversazioni meno recenti sono escluse e non verranno condivise.",
+            "es": f"Su exportación es demasiado grande para compartirla por completo. Solo se muestran a continuación, y se pueden compartir, sus {included} conversaciones más recientes"
+                  + (f" (con actividad a partir del {date})" if date else "")
+                  + f". Se omiten {left_out} conversaciones más antiguas, que no se compartirán.",
+        }[lang]
+    return props.Translatable(cast(props.Translations, texts))
+
+
+#: From this share of the donation budget on, the review page asks the participant
+#: to close other tabs: other tabs share the browser's memory, and a large
+#: donation leaves little room for them (ADR-0048). Smaller donations never see it.
+LARGE_DONATION_FRACTION = 0.5
+
+
+def close_tabs_notice() -> props.Translatable:
+    return props.Translatable({
+        "en": "Your data is large. Before you share it, close other browser tabs and programs you do not need, and keep this tab open until sending is complete.",
+        "nl": "Je gegevens zijn groot. Sluit voordat je ze deelt andere browsertabbladen en programma's die je niet nodig hebt, en houd dit tabblad open tot het versturen klaar is.",
+        "de": "Ihre Daten sind umfangreich. Schließen Sie vor dem Teilen andere Browser-Tabs und Programme, die Sie nicht brauchen, und lassen Sie diesen Tab geöffnet, bis das Senden abgeschlossen ist.",
+        "it": "I suoi dati sono di grandi dimensioni. Prima di condividerli, chiuda le altre schede del browser e i programmi che non le servono, e tenga aperta questa scheda fino al termine dell'invio.",
+        "es": "Sus datos son grandes. Antes de compartirlos, cierre las demás pestañas del navegador y los programas que no necesite, y mantenga abierta esta pestaña hasta que termine el envío.",
+    })
+
+
+def review_notice(errors, large_donation: bool = False) -> props.Translatable | None:
+    """The review page's notice: what was left out for size, the advice to close
+    other tabs (only for a large donation), then what could not be read; None
+    when none applies."""
+    candidates = (size_cap_notice(errors), close_tabs_notice() if large_donation else None, omitted_data_notice(errors))
+    parts = [n for n in candidates if n is not None]
+    if not parts:
+        return None
+    langs = parts[0].toDict()["translations"].keys()
+    joined = {lang: "\n\n".join(p.toDict()["translations"].get(lang, "") for p in parts) for lang in langs}
+    return props.Translatable(cast(props.Translations, joined))
+
+
 def generate_review_data_prompt(
-    description: props.Translatable, table_list: list[d3i_props.PropsUIPromptConsentFormTableViz]
+    description: props.Translatable,
+    table_list: list[d3i_props.PropsUIPromptConsentFormTableViz],
+    notice: props.Translatable | None = None,
 ) -> d3i_props.PropsUIPromptConsentFormViz:
     """
     Generates a data review form with a list of tables and a description, including default donate question and button.
@@ -164,6 +369,7 @@ def generate_review_data_prompt(
     Args:
         table_list (list[props.PropsUIPromptConsentFormTableViz]): A list of consent form tables to be included in the prompt.
         description (props.Translatable): A translatable description text for the consent prompt.
+        notice (props.Translatable | None): Optional highlighted notice, e.g. that some data could not be read.
 
     Returns:
         props.PropsUIPromptConsentForm: A structured consent form object containing the provided table list, description,
@@ -190,11 +396,12 @@ def generate_review_data_prompt(
     )
 
     return d3i_props.PropsUIPromptConsentFormViz(
-        tables=table_list, description=description, donate_question=donate_question, donate_button=donate_button
+        tables=table_list, description=description, donate_question=donate_question, donate_button=donate_button,
+        notice=notice,
     )
 
 
-def donate(key: str, json_string: str) -> CommandSystemDonate:
+def donate(key: str, json_string: Any) -> CommandSystemDonate:
     """
     Initiates a donation process using the provided key and data.
 
@@ -203,29 +410,13 @@ def donate(key: str, json_string: str) -> CommandSystemDonate:
 
     Args:
         key (str): The key associated with the donation process. The key will be used in the file name.
-        json_string (str): A JSON-formatted string containing the donated data.
+        json_string: The donated JSON as a str, or as UTF-8 bytes (the JsProxy of the
+            consent page's Uint8Array, passed through untouched; ADR-0046).
 
     Returns:
         CommandSystemDonate: A system command that initiates the donation process. Must be yielded.
     """
     return CommandSystemDonate(key, json_string)
-
-
-def donate_staged(key: str, staged_id: str) -> CommandSystemDonate:
-    """
-    Donates data the page has staged (a PayloadStagedDonation from the consent page).
-
-    The command carries only the staging id; the page substitutes the data right
-    before handing it to the host, so the donation never passes through Python.
-
-    Args:
-        key (str): The key associated with the donation process. The key will be used in the file name.
-        staged_id (str): The id from the PayloadStagedDonation.
-
-    Returns:
-        CommandSystemDonate: A system command that initiates the donation process. Must be yielded.
-    """
-    return CommandSystemDonate(key, "", staged_id)
 
 
 def exit(code: int, info: str) -> CommandSystemExit:
@@ -481,6 +672,149 @@ def render_task_incomplete_page(platform_name: str) -> CommandUIRender:
         ok=props.Translatable({"en": "OK", "nl": "OK", "de": "OK", "it": "OK", "es": "OK"}),
     )
     page = props.PropsUIPageDataSubmission(platform_name, header, body)
+    return CommandUIRender(page)
+
+
+#: Largest part a donation is sent in. Each part is its own request to the host,
+#: under its own key, so neither the browser nor Next ever handles the whole
+#: donation in one request (ADR-0047; Eyra review R01/R02).
+DONATION_CHUNK_BYTES = d3i_props.DONATE_PART_BYTES
+
+
+def donation_chunk_bounds(data, chunk_bytes: int | None = None) -> list[tuple[int, int]]:
+    """Split a donation into ``(start, end)`` ranges of at most ``chunk_bytes``.
+
+    ``data`` is the UTF-8 bytes the consent page donates (a JsProxy of a
+    Uint8Array in Pyodide, or ``bytes``) or a ``str``. Bytes are never cut
+    inside a character: a part ends before a UTF-8 continuation byte, so every
+    part decodes on its own and the parts concatenate to the original text.
+    """
+    if chunk_bytes is None:
+        chunk_bytes = DONATION_CHUNK_BYTES
+    total = len(data)
+    if total <= chunk_bytes:
+        return [(0, total)]
+    is_text = isinstance(data, str)
+    bounds = []
+    start = 0
+    while start < total:
+        end = min(start + chunk_bytes, total)
+        if not is_text:
+            while start < end < total and 0x80 <= data[end] <= 0xBF:
+                end -= 1
+        bounds.append((start, end))
+        start = end
+    return bounds
+
+
+def donation_chunk(data, start: int, end: int):
+    """One part of a donation. For the page's bytes this is a new standalone
+    Uint8Array (``slice``, not ``subarray``): the worker can then transfer it,
+    whereas a view would be cloned together with the whole donation."""
+    if isinstance(data, (str, bytes)):
+        return data[start:end]
+    return data.slice(start, end)
+
+
+def is_part_list(data) -> bool:
+    """True for a donation already split into parts: the consent page's list of
+    Uint8Arrays (a JsProxy of a JS Array in Pyodide), or a Python list."""
+    if isinstance(data, (list, tuple)):
+        return True
+    if isinstance(data, (str, bytes)):
+        return False
+    try:
+        import js  # pyright: ignore[reportMissingModuleSource]
+
+        return js.Array.isArray(data) is True
+    except Exception:
+        return False
+
+
+def donation_parts(data):
+    """``(number of parts, iterator over the parts)`` of a donation.
+
+    The consent page sends its parts ready-made; each is passed on untouched, and
+    leaves the worker when its donate command is transferred to the page. Any other
+    donation (a str, or one bytes object) is split here with donation_chunk_bounds.
+    """
+    if is_part_list(data):
+        return len(data), _page_parts(data)
+    bounds = donation_chunk_bounds(data)
+    if len(bounds) == 1:
+        return 1, iter([data])
+    return len(bounds), (donation_chunk(data, start, end) for start, end in bounds)
+
+
+def _page_parts(data):
+    for i in range(len(data)):
+        yield data[i]
+        # Asked for the next part, so this one was delivered: release it.
+        data[i] = None
+
+
+def sendable_copy(part):
+    """What a donate command carries: for the page's bytes a copy (``slice``), so
+    the part itself stays in the worker until the host confirms it and can be sent
+    again if it fails. The copy is transferred to the page; the cost is one part."""
+    if isinstance(part, (str, bytes)):
+        return part
+    return part.slice()
+
+
+def donation_size(data) -> int:
+    """Total donated bytes (characters for a str), without converting anything."""
+    return sum(len(part) for part in data) if is_part_list(data) else len(data)
+
+
+def donation_part_key(key: str, part: int, total: int) -> str:
+    """The key of one part. Without a hyphen, so parsers that read the platform
+    after the last hyphen (ADR-0020) see ``chatgpt_part2of7``."""
+    return key if total == 1 else f"{key}_part{part}of{total}"
+
+
+def render_donation_retry_page(platform_name: str, part: int, total: int) -> CommandUIRender:
+    """A part could not be sent (also after an automatic retry): try again or stop.
+    Parts already sent stay sent; trying again resumes at this part."""
+    header = props.PropsUIHeader(props.Translatable({
+        "en": "Sending did not work",
+        "nl": "Versturen is niet gelukt",
+    }))
+    if total == 1:
+        text = {
+            "en": "Your data could not be sent. Please check your internet connection and try again.",
+            "nl": "Je gegevens konden niet worden verstuurd. Controleer je internetverbinding en probeer het opnieuw.",
+        }
+    else:
+        text = {
+            "en": f"Part {part} of {total} could not be sent. Please check your internet connection and try again. The parts already sent are kept.",
+            "nl": f"Deel {part} van {total} kon niet worden verstuurd. Controleer je internetverbinding en probeer het opnieuw. De delen die al zijn verstuurd, blijven bewaard.",
+        }
+    body = props.PropsUIPromptConfirm(
+        text=props.Translatable(cast(props.Translations, text)),
+        ok=props.Translatable({"en": "Try again", "nl": "Opnieuw proberen"}),
+        cancel=props.Translatable({"en": "Stop", "nl": "Stoppen"}),
+    )
+    return CommandUIRender(props.PropsUIPageDataSubmission(platform_name, header, body))
+
+
+def render_donation_progress_page(platform_name: str, part: int, total: int) -> CommandUIRender:
+    """Shown while a donation is sent; answers at once (PropsUIPromptProgress)."""
+    header = props.PropsUIHeader(props.Translatable({
+        "en": "Sending your data",
+        "nl": "Je gegevens worden verstuurd",
+    }))
+    if total == 1:
+        text = props.Translatable({
+            "en": "Your data is being sent. Please keep this page open.",
+            "nl": "Je gegevens worden verstuurd. Houd deze pagina open.",
+        })
+    else:
+        text = props.Translatable({
+            "en": f"Sending part {part} of {total}. This can take a few minutes. Please keep this page open.",
+            "nl": f"Deel {part} van {total} wordt verstuurd. Dit kan een paar minuten duren. Houd deze pagina open.",
+        })
+    page = props.PropsUIPageDataSubmission(platform_name, header, d3i_props.PropsUIPromptProgress(text=text))
     return CommandUIRender(page)
 
 

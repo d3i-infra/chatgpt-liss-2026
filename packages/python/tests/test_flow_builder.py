@@ -71,10 +71,15 @@ def make_payload_file(size: int = 1024) -> MagicMock:
     return make_payload("PayloadFile", value=adapter)
 
 
+def is_progress_page(cmd) -> bool:
+    """A progress page (e.g. "Sending part 2 of 7") answers by itself, like a log."""
+    return isinstance(cmd, CommandUIRender) and cmd.toDict()["page"]["body"][0]["__type__"] == "PropsUIPromptProgress"
+
+
 def advance_past_logs(gen, response=None):
     """Send response to generator, skip any CommandSystemLog commands, return next non-log command."""
     cmd = gen.send(response)
-    while isinstance(cmd, CommandSystemLog):
+    while isinstance(cmd, CommandSystemLog) or is_progress_page(cmd):
         cmd = gen.send(make_payload("PayloadVoid"))
     return cmd
 
@@ -221,10 +226,11 @@ class TestNoDataPath:
             gen.send(make_payload("PayloadTrue"))
 
     def test_no_data_with_extraction_errors_is_a_failure_not_a_completion(self):
-        """Zero tables WITH extraction errors is an extraction failure, never
-        the clean no-data acknowledgment (which completes) — see ADR-0019's
-        no-data/extraction-bug separation. It routes through the uncaught-error
-        path, so the participant is offered the error report and stays pending."""
+        """Zero tables WITH extraction errors is an unreadable file, never the
+        clean no-data acknowledgment (which completes) — see ADR-0019's
+        no-data/extraction-bug separation. The participant gets the
+        unreadable-file page (Eyra review R04), not a traceback; stopping there
+        is abandonment, so the run stays pending (ADR-0039)."""
         flow = StubFlow(tables=[])
         flow.extract_data = lambda file, validation: ExtractionResult(
             tables=[], errors=Counter({"KeyError": 3})
@@ -232,8 +238,39 @@ class TestNoDataPath:
         gen = flow.start_flow()
 
         start_and_skip_logs(gen)
-        with pytest.raises(RuntimeError):
-            advance_past_logs(gen, make_payload_file())
+        cmd = advance_past_logs(gen, make_payload_file())
+        assert isinstance(cmd, CommandUIRender)
+        page = json.dumps(cmd.toDict())
+        assert "File could not be read" in page
+        assert "Choose another file" in page
+        assert "No data found" not in page
+        assert "KeyError" not in page
+
+        with pytest.raises(TaskIncompleteError) as exc:
+            advance_past_logs(gen, make_payload("PayloadFalse"))
+        assert exc.value.reason == "abandoned"
+
+    def test_unreadable_file_choose_another_loops_back_to_upload(self):
+        """'Choose another file' returns to the upload prompt; a readable file
+        then reaches the consent form."""
+        good_tables = StubFlow()._tables
+        results = [
+            ExtractionResult(tables=[], errors=Counter({"JSONDecodeError": 2})),
+            ExtractionResult(tables=good_tables, errors=Counter()),
+        ]
+        flow = StubFlow()
+        flow.extract_data = lambda file, validation: results.pop(0)
+        gen = flow.start_flow()
+
+        start_and_skip_logs(gen)
+        cmd = advance_past_logs(gen, make_payload_file())
+        assert "File could not be read" in json.dumps(cmd.toDict())
+
+        cmd = advance_past_logs(gen, make_payload("PayloadTrue"))
+        assert cmd.page.body.__class__.__name__ == "PropsUIPromptFileInput"
+
+        cmd = advance_past_logs(gen, make_payload_file())
+        assert isinstance(cmd.page.body, d3i_props.PropsUIPromptConsentFormViz)
 
 
 class TestSafetyErrorPath:
@@ -280,9 +317,19 @@ class TestDonateFailurePath:
         cmd = advance_past_logs(gen, make_payload("PayloadJSON", value='{"data": "test"}'))
         assert isinstance(cmd, CommandSystemDonate)
 
-        # Donate result → milestones → donate failure page
+        # First failure → one automatic retry of the same donation
+        cmd = advance_past_logs(gen, make_payload("PayloadResponse", success=False))
+        assert isinstance(cmd, CommandSystemDonate)
+
+        # Second failure → the participant is asked to try again or stop
         cmd = advance_past_logs(gen, make_payload("PayloadResponse", success=False))
         assert isinstance(cmd, CommandUIRender)
+        assert "Try again" in str(cmd.toDict())
+
+        # Stop → donate failure page
+        cmd = advance_past_logs(gen, make_payload("PayloadFalse"))
+        assert isinstance(cmd, CommandUIRender)
+        assert "could not be submitted" in str(cmd.toDict())
 
         # User acknowledges → donation-failed exit, not a completion
         with pytest.raises(TaskIncompleteError) as exc:
@@ -588,29 +635,67 @@ class TestReviewPageReleasesTables:
         assert isinstance(cmd, CommandSystemDonate)
 
 
-class TestStagedDonation:
-    """The consent page can stage the reviewed data and answer with its id only;
-    the flow then donates by reference and the data never enters Python."""
 
-    def _to_consent(self):
-        gen = StubFlow().start_flow()
-        start_and_skip_logs(gen)
-        cmd = advance_past_logs(gen, make_payload_file())
-        assert isinstance(cmd, CommandUIRender)
+class BytesProxy:
+    """Stands in for the JsProxy of the Uint8Array the consent page donates: never a
+    str, converted only through to_bytes()."""
+
+    def __init__(self, data: bytes):
+        self._data = data
+        self.to_bytes_calls = 0
+
+    def __len__(self):
+        return len(self._data)
+
+    def to_bytes(self):
+        self.to_bytes_calls += 1
+        return self._data
+
+    def slice(self, start=0, end=None):
+        """Uint8Array.prototype.slice: a new array, still never converted to Python."""
+        return BytesProxy(self._data[start:end])
+
+
+class TestBytesDonation:
+    """The consent-viz page donates UTF-8 bytes (a JsProxy in Pyodide). The flow
+    passes the object through untouched (ADR-0046): Pyodide converts a str both ways at
+    a cost of hundreds of MB, and the bytes need no conversion at all."""
+
+    def _reach_consent(self, flow):
+        gen = flow.start_flow()
+        assert isinstance(start_and_skip_logs(gen), CommandUIRender)
+        assert isinstance(advance_past_logs(gen, make_payload_file()), CommandUIRender)
         return gen
 
-    def test_staged_consent_donates_by_reference(self):
-        gen = self._to_consent()
-        cmd = advance_past_logs(gen, make_payload("PayloadStagedDonation", value="staged-7", size=123))
+    def test_plaintext_passes_the_bytes_object_through_untouched(self):
+        flow = StubFlow()
+        gen = self._reach_consent(flow)
+        proxy = BytesProxy(b'{"data": "test"}')
+        cmd = advance_past_logs(gen, make_payload("PayloadJSON", value=proxy))
         assert isinstance(cmd, CommandSystemDonate)
-        d = cmd.toDict()
-        assert d["key"] == "test-session-testplatform"
-        assert d["staged_id"] == "staged-7"
-        assert d["json_string"] == ""
+        # A JS-side copy goes out (the original stays for a retry); nothing is
+        # converted to Python.
+        assert isinstance(cmd.json_string, BytesProxy) and cmd.json_string is not proxy
+        assert cmd.json_string._data == proxy._data
+        assert proxy.to_bytes_calls == 0 and cmd.json_string.to_bytes_calls == 0
 
-    def test_json_consent_still_donates_the_data(self):
-        gen = self._to_consent()
-        cmd = advance_past_logs(gen, make_payload("PayloadJSON", value='{"data": "test"}'))
-        d = cmd.toDict()
-        assert d["json_string"] == '{"data": "test"}'
-        assert "staged_id" not in d
+
+class TestOmittedDataDisclosure:
+    """Eyra review R03: when some data could not be read, the participant is
+    told on the review page before consenting."""
+
+    def _review_page(self, errors):
+        flow = StubFlow()
+        flow.extract_data = lambda file, validation: ExtractionResult(tables=flow._tables, errors=errors)
+        gen = flow.start_flow()
+        start_and_skip_logs(gen)
+        return advance_past_logs(gen, make_payload_file())
+
+    def test_review_page_names_what_was_skipped(self):
+        cmd = self._review_page(Counter({"SkippedMessage": 2}))
+        notice = cmd.page.body.notice
+        assert notice is not None and "• Messages: 2" in notice.translations["en"]
+
+    def test_no_notice_when_nothing_was_skipped(self):
+        cmd = self._review_page(Counter({"TimestampParseError": 1}))
+        assert cmd.page.body.notice is None
